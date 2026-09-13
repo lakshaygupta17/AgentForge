@@ -68,6 +68,10 @@ class RunCapacityError(RuntimeError):
     """All retained run slots are currently occupied by active work."""
 
 
+RunEventPublisher = Callable[[str, dict[str, Any]], None]
+ProgressRunner = Callable[[RunEventPublisher], dict[str, Any]]
+
+
 class RunManager:
     """Run one local workflow at a time and retain a bounded status history."""
 
@@ -76,10 +80,12 @@ class RunManager:
         runner: Callable[[], dict[str, Any]],
         *,
         maximum_retained_runs: int = 100,
+        progress_runner: ProgressRunner | None = None,
     ) -> None:
         if maximum_retained_runs <= 0:
             raise ValueError("maximum_retained_runs must be greater than zero")
         self._runner = runner
+        self._progress_runner = progress_runner
         self._maximum_retained_runs = maximum_retained_runs
         self._runs: dict[str, _MutableRun] = {}
         self._lock = RLock()
@@ -150,7 +156,14 @@ class RunManager:
             run.started_at = _utc_now()
             self._record(run, "run_started")
         try:
-            result = self._runner()
+            if self._progress_runner is None:
+                result = self._runner()
+            else:
+                result = self._progress_runner(
+                    lambda event_type, data: self._publish_progress(
+                        run_id, event_type, data
+                    )
+                )
         except Exception as error:
             with self._lock:
                 run = self._require(run_id)
@@ -176,6 +189,14 @@ class RunManager:
             else:
                 run.status = RunStatus.SUCCEEDED
                 self._record(run, "run_succeeded")
+
+    def _publish_progress(
+        self, run_id: str, event_type: str, data: dict[str, Any]
+    ) -> None:
+        with self._lock:
+            run = self._require(run_id)
+            if not run.status.terminal:
+                self._record(run, event_type, data)
 
     def _finish_cancelled(self, run: _MutableRun) -> None:
         if run.status.terminal:

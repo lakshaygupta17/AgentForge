@@ -64,3 +64,21 @@ class JsonlTrajectoryRecorderTests(TestCase):
         self.assertNotIn("bearer-private", serialized)
         self.assertNotIn("hunter2", serialized)
         self.assertIn("[REDACTED]", serialized)
+
+    def test_in_memory_observer_receives_only_the_sanitized_event(self) -> None:
+        observed: list[TrajectoryEvent] = []
+        recorder = InMemoryTrajectoryRecorder(on_record=observed.append)
+
+        recorder.record(
+            TrajectoryEvent(
+                "run-1",
+                "agent_completed",
+                "planner",
+                {"summary": "HF_TOKEN=hf_private", "token": "top-secret"},
+            )
+        )
+
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0], recorder.events[0])
+        self.assertNotIn("hf_private", str(observed[0].data))
+        self.assertEqual(observed[0].data["token"], "[REDACTED]")

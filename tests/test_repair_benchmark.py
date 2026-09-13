@@ -101,6 +101,32 @@ class RepairBenchmarkTests(TestCase):
             ["parity_direct", "parity_debug_retry", "parity_review_retry"],
         )
 
+    def test_benchmark_suite_streams_sanitized_agent_progress(self) -> None:
+        observed: list[tuple[str, str, str, dict[str, object]]] = []
+
+        result = run_repair_benchmark_suite(
+            lambda case_name, event: observed.append(
+                (case_name, event.event_type, event.actor, event.data)
+            )
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertTrue(
+            any(
+                case == "parity_direct"
+                and event_type == "agent_started"
+                and actor == "planner"
+                for case, event_type, actor, _ in observed
+            )
+        )
+        plan = next(
+            data
+            for case, event_type, _, data in observed
+            if case == "parity_direct" and event_type == "plan_created"
+        )
+        self.assertEqual(plan["step_count"], 3)
+        self.assertEqual(len(plan["steps"]), 3)
+
     def test_review_retry_benchmark_recovers_after_rejection(self) -> None:
         result = run_seeded_review_retry_benchmark()
 

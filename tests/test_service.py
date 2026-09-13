@@ -60,10 +60,14 @@ class LocalServiceTests(IsolatedAsyncioTestCase):
         self.assertIn("One task, six clear responsibilities", dashboard.text)
         self.assertIn("Repository intelligence", dashboard.text)
         self.assertIn("Start benchmark", dashboard.text)
+        self.assertIn("REAL-TIME ORCHESTRATOR", dashboard.text)
+        self.assertIn("agent-output-planner", dashboard.text)
         self.assertIn("The model never holds all the keys", dashboard.text)
         self.assertIn("/assets/dashboard.js", dashboard.text)
         self.assertNotIn("https://", dashboard.text)
         self.assertIn("EventSource", script.text)
+        self.assertIn("agent_progress", script.text)
+        self.assertIn("lastSequence", script.text)
         self.assertIn("Play walkthrough", dashboard.text)
         self.assertIn("submit_plan", script.text)
         self.assertIn("debugger", script.text)
@@ -104,6 +108,30 @@ class LocalServiceTests(IsolatedAsyncioTestCase):
         self.assertIn("event: run_started", events.text)
         self.assertIn("event: run_succeeded", events.text)
         self.assertEqual(events.headers["content-type"], "text/event-stream; charset=utf-8")
+
+    async def test_progress_runner_streams_agent_events(self) -> None:
+        def progress_runner(publish):
+            publish(
+                "agent_progress",
+                {
+                    "case_name": "sample",
+                    "event_type": "agent_started",
+                    "actor": "planner",
+                    "data": {},
+                },
+            )
+            return {"succeeded": True}
+
+        manager = RunManager(
+            lambda: {"succeeded": True}, progress_runner=progress_runner
+        )
+        async with local_client(manager) as client:
+            run_id = (await client.post("/runs", json={})).json()["run_id"]
+            await self._wait_for_status(client, run_id, {"succeeded"})
+            events = await client.get(f"/runs/{run_id}/events")
+
+        self.assertIn("event: agent_progress", events.text)
+        self.assertIn('"actor":"planner"', events.text)
 
     async def test_event_cursor_omits_earlier_events(self) -> None:
         manager = RunManager(lambda: {"succeeded": True})
@@ -196,9 +224,12 @@ class LocalServiceTests(IsolatedAsyncioTestCase):
             completed = await self._wait_for_status(
                 client, run_id, {"succeeded"}, timeout_seconds=10
             )
+            events = await client.get(f"/runs/{run_id}/events")
 
         result = completed["result"]
         self.assertIsInstance(result, dict)
         self.assertEqual(result["case_count"], 3)
         self.assertEqual(result["passed_cases"], 3)
         self.assertEqual(result["total_repair_attempts"], 5)
+        self.assertIn("event: agent_progress", events.text)
+        self.assertIn('"event_type":"agent_started"', events.text)

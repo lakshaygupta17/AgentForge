@@ -171,6 +171,9 @@ class DebuggerAgent:
             {
                 "evidence_count": len(diagnosis.evidence),
                 "recommendation_count": len(diagnosis.recommended_changes),
+                "hypothesis": diagnosis.hypothesis,
+                "evidence": list(diagnosis.evidence),
+                "recommended_changes": list(diagnosis.recommended_changes),
             },
         )
         return AgentResult(

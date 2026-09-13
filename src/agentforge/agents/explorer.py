@@ -245,6 +245,9 @@ class RepositoryExplorerAgent:
                             "iteration": iteration,
                             "relevant_file_count": len(report.relevant_files),
                             "finding_count": len(report.findings),
+                            "summary": report.summary,
+                            "relevant_files": list(report.relevant_files),
+                            "findings": list(report.findings),
                         },
                     )
                     return AgentResult(

@@ -23,7 +23,7 @@ from agentforge.llm.models import ChatMessage, ChatResponse, ToolCall
 from agentforge.orchestration.repair import RepairOrchestrator
 from agentforge.policy.engine import SecurityPolicy
 from agentforge.sandbox.local import LocalSandbox
-from agentforge.telemetry.trajectory import InMemoryTrajectoryRecorder
+from agentforge.telemetry.trajectory import InMemoryTrajectoryRecorder, TrajectoryEvent
 from agentforge.tools.editor import RepositoryEditor
 from agentforge.tools.repository import RepositoryInspector
 
@@ -96,6 +96,9 @@ class RepairBenchmarkSummary:
 
 class BenchmarkHistoryError(ValueError):
     """A benchmark history file is absent, empty, or malformed."""
+
+
+BenchmarkEventObserver = Callable[[str, TrajectoryEvent], None]
 
 
 def append_repair_benchmark(
@@ -602,6 +605,7 @@ def _review_retry_responses(test_call: dict[str, object]) -> list[ChatResponse]:
 def _run_seeded_repair_case(
     case_name: str,
     responses_factory: Callable[[dict[str, object]], list[ChatResponse]],
+    event_observer: BenchmarkEventObserver | None = None,
 ) -> RepairBenchmarkResult:
     """Run one deterministic parity-repair scenario against real local tests."""
 
@@ -623,7 +627,13 @@ def _run_seeded_repair_case(
             "timeout_seconds": 10,
         }
         provider = MockLLMProvider(responses_factory(test_call))
-        recorder = InMemoryTrajectoryRecorder()
+        recorder = InMemoryTrajectoryRecorder(
+            on_record=(
+                None
+                if event_observer is None
+                else lambda event: event_observer(case_name, event)
+            )
+        )
         inspector = RepositoryInspector(sandbox.workspace)
         editor = RepositoryEditor(inspector)
         workflow = RepairOrchestrator(
@@ -657,31 +667,45 @@ def _run_seeded_repair_case(
     )
 
 
-def run_seeded_repair_benchmark() -> RepairBenchmarkResult:
+def run_seeded_repair_benchmark(
+    event_observer: BenchmarkEventObserver | None = None,
+) -> RepairBenchmarkResult:
     """Repair a known parity bug directly with fixed model responses."""
 
-    return _run_seeded_repair_case("parity_direct", _direct_repair_responses)
+    return _run_seeded_repair_case(
+        "parity_direct", _direct_repair_responses, event_observer
+    )
 
 
-def run_seeded_retry_benchmark() -> RepairBenchmarkResult:
+def run_seeded_retry_benchmark(
+    event_observer: BenchmarkEventObserver | None = None,
+) -> RepairBenchmarkResult:
     """Make a bad repair, diagnose its failed tests, then retry successfully."""
 
-    return _run_seeded_repair_case("parity_debug_retry", _retry_repair_responses)
+    return _run_seeded_repair_case(
+        "parity_debug_retry", _retry_repair_responses, event_observer
+    )
 
 
-def run_seeded_review_retry_benchmark() -> RepairBenchmarkResult:
+def run_seeded_review_retry_benchmark(
+    event_observer: BenchmarkEventObserver | None = None,
+) -> RepairBenchmarkResult:
     """Pass tests, recover from a rejected review, and gain final acceptance."""
 
-    return _run_seeded_repair_case("parity_review_retry", _review_retry_responses)
+    return _run_seeded_repair_case(
+        "parity_review_retry", _review_retry_responses, event_observer
+    )
 
 
-def run_repair_benchmark_suite() -> RepairBenchmarkSuiteResult:
+def run_repair_benchmark_suite(
+    event_observer: BenchmarkEventObserver | None = None,
+) -> RepairBenchmarkSuiteResult:
     """Run all deterministic repair scenarios and aggregate their outcomes."""
 
     cases = (
-        run_seeded_repair_benchmark(),
-        run_seeded_retry_benchmark(),
-        run_seeded_review_retry_benchmark(),
+        run_seeded_repair_benchmark(event_observer),
+        run_seeded_retry_benchmark(event_observer),
+        run_seeded_review_retry_benchmark(event_observer),
     )
     passed_cases = sum(case.succeeded for case in cases)
     return RepairBenchmarkSuiteResult(

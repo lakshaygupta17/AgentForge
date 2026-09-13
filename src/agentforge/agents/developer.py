@@ -286,6 +286,8 @@ class DeveloperAgent:
             {
                 "changed_file_count": len(report.changed_files),
                 "patch_count": report.patch_count,
+                "summary": report.summary,
+                "changed_files": list(report.changed_files),
             },
         )
         return AgentResult(

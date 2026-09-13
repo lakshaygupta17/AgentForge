@@ -157,7 +157,12 @@ class ReviewerAgent:
             state,
             self.name,
             "review_completed",
-            {"accepted": accepted, "issue_count": len(report.issues)},
+            {
+                "accepted": accepted,
+                "issue_count": len(report.issues),
+                "summary": report.summary,
+                "issues": list(report.issues),
+            },
         )
         return AgentResult(
             accepted,

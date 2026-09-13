@@ -303,7 +303,13 @@ class TesterAgent:
             state,
             self.name,
             "testing_completed",
-            {"passed": report.passed, "exit_code": report.exit_code},
+            {
+                "passed": report.passed,
+                "exit_code": report.exit_code,
+                "summary": report.summary,
+                "command": list(report.command),
+                "timed_out": report.timed_out,
+            },
         )
         return AgentResult(
             passed,

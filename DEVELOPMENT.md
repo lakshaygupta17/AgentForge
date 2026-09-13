@@ -680,3 +680,16 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Kept the workflow bounded and fail-closed: a missing or invalid report on the correction retry ends exploration without modifying or exporting the repository.
 - Added regression tests for successful correction and repeated-invalid-tool failure.
 - Final offline verification: 195 tests pass, three opt-in external tests skip, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files.
+
+### 2026-09-13 — Real-time agent visualizer
+
+- Connected the benchmark trajectory recorder to the local service through an optional sanitized event observer.
+- Stream real orchestrator events through the existing server-sent event endpoint as `agent_progress` records; no frontend timer invents agent activity.
+- Enriched each specialist's completion event with its safe structured output: plan, exploration findings, changed files, test evidence, diagnosis, or review verdict.
+- Added a six-stage live rail showing active, complete, failed, waiting, and skipped roles for the current benchmark case.
+- Added per-agent output histories that retain results across direct repair, debugger retry, and reviewer retry cases.
+- Added cursor-based EventSource reconnection so the browser resumes after the last received sequence instead of duplicating the timeline.
+- Kept output rendering text-only, passed events through trajectory redaction before publication, and avoided displaying the absolute Python executable path.
+- Added observer-redaction, benchmark-progress, service-stream, and dashboard-asset regression tests.
+- Visually verified an in-flight Tester stage and the completed three-case output histories in the local browser.
+- Final verification: 198 tests pass, three opt-in external tests skip, 17 subtests pass, JavaScript syntax passes, Ruff passes, and strict MyPy passes across 69 source files.

@@ -118,7 +118,11 @@ class PlannerAgent:
             state,
             self.name,
             "plan_created",
-            {"step_count": len(plan.steps)},
+            {
+                "step_count": len(plan.steps),
+                "steps": list(plan.steps),
+                "rationale": plan.rationale,
+            },
         )
         state.memory.remember(
             "plan",

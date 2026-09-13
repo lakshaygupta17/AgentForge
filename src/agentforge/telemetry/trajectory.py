@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,9 +102,13 @@ def redact_trajectory_event(event: TrajectoryEvent) -> TrajectoryEvent:
 @dataclass(slots=True)
 class InMemoryTrajectoryRecorder:
     events: list[TrajectoryEvent] = field(default_factory=list)
+    on_record: Callable[[TrajectoryEvent], None] | None = None
 
     def record(self, event: TrajectoryEvent) -> None:
-        self.events.append(redact_trajectory_event(event))
+        sanitized = redact_trajectory_event(event)
+        self.events.append(sanitized)
+        if self.on_record is not None:
+            self.on_record(sanitized)
 
 
 class JsonlTrajectoryRecorder:

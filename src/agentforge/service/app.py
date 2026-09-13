@@ -18,10 +18,12 @@ from agentforge.evaluation.repair import run_repair_benchmark_suite
 from agentforge.service.dashboard import DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS
 from agentforge.service.manager import (
     RunCapacityError,
+    RunEventPublisher,
     RunManager,
     RunNotFoundError,
     ServiceRunSnapshot,
 )
+from agentforge.telemetry.trajectory import TrajectoryEvent
 
 
 class CreateRunRequest(BaseModel):
@@ -41,8 +43,26 @@ def _default_runner() -> dict[str, Any]:
     return asdict(run_repair_benchmark_suite())
 
 
+def _default_progress_runner(publish: RunEventPublisher) -> dict[str, Any]:
+    def observe(case_name: str, event: TrajectoryEvent) -> None:
+        publish(
+            "agent_progress",
+            {
+                "case_name": case_name,
+                "event_type": event.event_type,
+                "actor": event.actor,
+                "data": event.data,
+                "occurred_at": event.occurred_at,
+            },
+        )
+
+    return asdict(run_repair_benchmark_suite(observe))
+
+
 def create_app(manager: RunManager | None = None) -> FastAPI:
-    run_manager = manager or RunManager(_default_runner)
+    run_manager = manager or RunManager(
+        _default_runner, progress_runner=_default_progress_runner
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
