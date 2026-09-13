@@ -181,6 +181,82 @@ class RepairWorkflowTests(TestCase):
 
 
 class RepositoryEditorTests(TestCase):
+    def test_exact_patch_accepts_lf_text_and_preserves_crlf_file(self) -> None:
+        with LocalSandbox() as sandbox:
+            target = sandbox.workspace / "checkout.py"
+            target.write_bytes(
+                b"subtotal = 5200\r\nshipping = (\r\n"
+                b"    0 if subtotal >= threshold else 500\r\n)\r\n"
+            )
+            editor = RepositoryEditor(RepositoryInspector(sandbox.workspace))
+
+            editor.apply_patch(
+                {
+                    "changes": [
+                        {
+                            "path": "checkout.py",
+                            "old_text": (
+                                "shipping = (\n"
+                                "    0 if subtotal >= threshold else 500\n"
+                                ")"
+                            ),
+                            "new_text": (
+                                "shipping = (\n"
+                                "    0 if discounted >= threshold else 500\n"
+                                ")"
+                            ),
+                        }
+                    ]
+                }
+            )
+
+            self.assertEqual(
+                target.read_bytes(),
+                b"subtotal = 5200\r\nshipping = (\r\n"
+                b"    0 if discounted >= threshold else 500\r\n)\r\n",
+            )
+
+    def test_exact_patch_preserves_lf_when_model_supplies_crlf(self) -> None:
+        with LocalSandbox() as sandbox:
+            target = sandbox.workspace / "module.py"
+            target.write_bytes(b"alpha\nbeta\ngamma\n")
+            editor = RepositoryEditor(RepositoryInspector(sandbox.workspace))
+
+            editor.apply_patch(
+                {
+                    "changes": [
+                        {
+                            "path": "module.py",
+                            "old_text": "alpha\r\nbeta",
+                            "new_text": "alpha\r\nfixed",
+                        }
+                    ]
+                }
+            )
+
+            self.assertEqual(target.read_bytes(), b"alpha\nfixed\ngamma\n")
+
+    def test_exact_patch_rejects_a_newline_only_no_op(self) -> None:
+        with LocalSandbox() as sandbox:
+            target = sandbox.workspace / "module.py"
+            target.write_bytes(b"alpha\r\nbeta\r\n")
+            editor = RepositoryEditor(RepositoryInspector(sandbox.workspace))
+
+            with self.assertRaisesRegex(RepositoryEditError, "does not change"):
+                editor.apply_patch(
+                    {
+                        "changes": [
+                            {
+                                "path": "module.py",
+                                "old_text": "alpha\r\nbeta",
+                                "new_text": "alpha\nbeta",
+                            }
+                        ]
+                    }
+                )
+
+            self.assertEqual(target.read_bytes(), b"alpha\r\nbeta\r\n")
+
     def test_enforces_configured_write_path_policy(self) -> None:
         with LocalSandbox() as sandbox:
             source = sandbox.workspace / "source.py"

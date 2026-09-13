@@ -67,12 +67,21 @@ class RepositoryEditor:
             if relative_path not in self._original_contents:
                 self._original_contents[relative_path] = current
 
-            occurrences = current.count(replacement.old_text)
+            current_for_match, old_text, new_text, newline = (
+                self._prepare_exact_replacement(current, replacement)
+            )
+            occurrences = current_for_match.count(old_text)
             if occurrences != 1:
                 raise RepositoryEditError(
                     f"Expected old_text exactly once in {relative_path}; found {occurrences}"
                 )
-            updated = current.replace(replacement.old_text, replacement.new_text, 1)
+            updated = current_for_match.replace(old_text, new_text, 1)
+            if newline not in {None, "\n"}:
+                updated = updated.replace("\n", newline)
+            if updated == current:
+                raise RepositoryEditError(
+                    f"Patch does not change {relative_path} after newline normalization"
+                )
             if len(updated.encode("utf-8")) > self.inspector.maximum_file_bytes:
                 raise RepositoryEditError(
                     f"Edited file exceeds the {self.inspector.maximum_file_bytes}-byte limit"
@@ -159,6 +168,30 @@ class RepositoryEditor:
         if old_text == new_text:
             raise RepositoryEditError("A replacement must change the file")
         return TextReplacement(path.strip(), old_text, new_text)
+
+    def _prepare_exact_replacement(
+        self, current: str, replacement: TextReplacement
+    ) -> tuple[str, str, str, str | None]:
+        """Normalize uniform line endings for matching without changing file style."""
+
+        without_crlf = current.replace("\r\n", "")
+        has_crlf = "\r\n" in current
+        has_lf = "\n" in without_crlf
+        has_cr = "\r" in without_crlf
+        if sum((has_crlf, has_lf, has_cr)) > 1:
+            return current, replacement.old_text, replacement.new_text, None
+
+        newline = "\r\n" if has_crlf else "\r" if has_cr else "\n"
+        return (
+            self._normalize_newlines(current),
+            self._normalize_newlines(replacement.old_text),
+            self._normalize_newlines(replacement.new_text),
+            newline,
+        )
+
+    @staticmethod
+    def _normalize_newlines(value: str) -> str:
+        return value.replace("\r\n", "\n").replace("\r", "\n")
 
     def _commit(self, staged: dict[str, str]) -> None:
         for relative_path, content in staged.items():

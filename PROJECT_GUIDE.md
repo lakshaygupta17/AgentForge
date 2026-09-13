@@ -297,6 +297,33 @@ the same tests were run against the correct reference implementation and all
 eight passed. That two-step check proves the fixture itself is coherent and that
 the failures were intentionally seeded.
 
+## 7.16 How does AgentForge recover from a rejected edit?
+
+Code downloaded through Git on Windows often stores line breaks differently from
+code produced by an AI model. The words look identical on screen, but a strict
+editor can see Windows `CRLF` and model-generated `LF` as different text. That is
+why the first harder checkout run could read the files but could not apply its
+proposed replacements.
+
+AgentForge now temporarily compares uniform line endings in one common form. It
+then writes the edited file using the same line-ending style it started with. The
+safety rule is unchanged: the old text must occur exactly once, every file must
+remain inside the allowed workspace, and all replacements validate before any
+file is written. A file containing a mixture of line-ending styles is not
+silently cleaned up.
+
+The Developer also gets clearer recovery rails. A rejected edit produces a
+direct instruction to reread the file and copy a small, exact section. If all
+normal turns are used, it receives at most one correction-only patch attempt. If
+that succeeds, a separate final turn can only report the confirmed files. A
+second bad correction still stops the workflow safely instead of looping and
+spending more Hobby-plan quota.
+
+Finally, the Explorer and Developer are told to follow imports into helper files.
+For the checkout challenge, that means treating `checkout.py`, `discounts.py`,
+and `taxes.py` as one behavior rather than assuming every mistake lives in the
+main checkout function.
+
 ## 8. How the pieces fit together
 
 ```text

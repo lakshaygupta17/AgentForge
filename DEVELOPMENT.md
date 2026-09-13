@@ -701,3 +701,14 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Proved the acceptance contract first against the correct reference implementation: all eight tests passed.
 - Seeded three independent defects across the discount, tax, and checkout modules. The final challenge passes four tests and fails four for the intended reasons.
 - Kept the fixture fully synthetic and dependency-free so it is suitable for the personal E2B Hobby workflow without exposing user code. No hosted inference or microVM run was performed as part of fixture creation.
+
+### 2026-09-13 — Developer patch recovery hardening
+
+- Diagnosed the first hosted checkout attempt from its sanitized trajectory: E2B and Hugging Face worked, but all five Developer edits were rejected before any source changed.
+- Confirmed the fresh Windows Git clone used CRLF while the source fixture and typical model patches used LF.
+- Made exact replacements newline-tolerant for uniformly styled LF, CRLF, and legacy CR files while preserving the file's original style; mixed-newline files retain strict matching.
+- Added explicit Developer guidance to trace imported helpers, reread after rejection, and prefer small exact replacements over hand-counted unified hunks.
+- Added one bounded correction-only patch turn after rejected edits and a report-only finalization turn after an accepted last-turn patch. Invalid correction or finalization calls still fail closed.
+- Strengthened Explorer guidance to include every inspected helper module that may need a change rather than reporting only the coordinating file.
+- Added regression coverage for LF-to-CRLF and CRLF-to-LF replacements, successful rejected-patch recovery, report-only finalization, and failure after one invalid correction.
+- Final offline verification: 203 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.

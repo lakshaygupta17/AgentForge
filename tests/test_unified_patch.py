@@ -9,6 +9,7 @@ from agentforge.agents.planner import PLAN_ARTIFACT
 from agentforge.core.models import Task, WorkflowState
 from agentforge.llm.mock import MockLLMProvider
 from agentforge.llm.models import ChatMessage, ChatResponse, ToolCall
+from agentforge.telemetry.trajectory import InMemoryTrajectoryRecorder
 from agentforge.tools.editor import RepositoryEditError, RepositoryEditor
 from agentforge.tools.repository import RepositoryInspector
 
@@ -120,3 +121,108 @@ class UnifiedPatchTests(TestCase):
             self.assertIn(DEVELOPMENT_ARTIFACT, result.artifacts)
             self.assertEqual(target.read_text(encoding="utf-8"), "enabled = True\n")
 
+    def test_developer_gets_one_patch_correction_then_report_only_turn(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "app.py"
+            target.write_bytes(b"enabled = False\r\n")
+            editor = RepositoryEditor(RepositoryInspector(root))
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "bad-patch",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "app.py",
+                                    "old_text": "missing = False",
+                                    "new_text": "enabled = True",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "corrected-patch",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "app.py",
+                                    "old_text": "enabled = False\n",
+                                    "new_text": "enabled = True\n",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "finish",
+                        "finish_development",
+                        {"summary": "Enabled the feature", "changed_files": ["app.py"]},
+                    ),
+                ]
+            )
+            state = WorkflowState(Task("Enable the feature"))
+            state.artifacts[PLAN_ARTIFACT] = Plan(("Edit app.py",), "Direct change")
+            state.artifacts[EXPLORATION_ARTIFACT] = ExplorationReport(
+                "Found flag", ("app.py",), ("Feature is disabled",)
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = DeveloperAgent(
+                provider,
+                editor,
+                recorder=recorder,
+                maximum_iterations=1,
+            ).run(state)
+
+            self.assertTrue(result.success)
+            self.assertEqual(target.read_bytes(), b"enabled = True\r\n")
+            self.assertEqual(
+                tuple(tool.name for tool in provider.requests[1].tools),
+                ("apply_patch", "apply_unified_patch"),
+            )
+            self.assertEqual(
+                tuple(tool.name for tool in provider.requests[2].tools),
+                ("finish_development",),
+            )
+            event_types = [event.event_type for event in recorder.events]
+            self.assertIn("development_correction_retry", event_types)
+            self.assertIn("development_finalization_required", event_types)
+
+    def test_developer_stops_after_invalid_correction_retry(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "app.py"
+            target.write_text("enabled = False\n", encoding="utf-8")
+            editor = RepositoryEditor(RepositoryInspector(root))
+            rejected_change = {
+                "changes": [
+                    {
+                        "path": "app.py",
+                        "old_text": "not present",
+                        "new_text": "enabled = True",
+                    }
+                ]
+            }
+            provider = MockLLMProvider(
+                [
+                    tool_response("bad-patch", "apply_patch", rejected_change),
+                    tool_response("bad-retry", "apply_patch", rejected_change),
+                ]
+            )
+            state = WorkflowState(Task("Enable the feature"))
+            state.artifacts[PLAN_ARTIFACT] = Plan(("Edit app.py",), "Direct change")
+            state.artifacts[EXPLORATION_ARTIFACT] = ExplorationReport(
+                "Found flag", ("app.py",), ("Feature is disabled",)
+            )
+
+            result = DeveloperAgent(
+                provider,
+                editor,
+                maximum_iterations=1,
+            ).run(state)
+
+            self.assertFalse(result.success)
+            self.assertEqual(len(provider.requests), 2)
+            self.assertEqual(target.read_text(encoding="utf-8"), "enabled = False\n")

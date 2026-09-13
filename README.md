@@ -204,6 +204,20 @@ On three deliberately paraphrased fixture queries, exact whole-phrase search sco
 
 The Developer cannot submit a whole replacement repository or an arbitrary write command. It can use exact `old_text` → `new_text` replacements or a restricted standard unified diff. AgentForge validates the entire patch before writing, rejects mismatched hunks and sensitive paths, caps patch size, and replaces each changed file atomically. Creation, deletion, renaming, quoted Git paths, and final-newline changes remain deliberately unsupported.
 
+Exact replacements normalize uniform LF, CRLF, or legacy CR line endings only
+while comparing and applying the requested text, then write the result using the
+file's original style. This lets a model-generated LF replacement safely edit a
+Windows Git checkout without rewriting the file to LF. Mixed-line-ending files
+retain strict byte-for-text matching rather than being silently normalized.
+
+If every regular Developer turn ends without an accepted patch after at least
+one rejected edit, AgentForge grants one correction-only patch turn. An accepted
+last-turn patch receives a separate report-only turn exposing only
+`finish_development`. Both recoveries are bounded; another invalid response still
+fails closed. Rejection feedback tells the Developer to reread the file and use a
+small exact replacement, while Explorer and Developer prompts explicitly trace
+imported helper modules for multi-file defects.
+
 The Tester converts a structured model tool call into an `ActionRequest`. That request goes through `SecurityPolicy` and then the selected `Sandbox`; the agent never calls a process API itself. Its final pass/fail claim must exactly match the last execution result.
 
 When tests fail, `RepairOrchestrator` sends their command, exit status, stdout, and stderr to the Debugger. The resulting structured diagnosis becomes context for the next Developer attempt. A configurable repair-attempt limit prevents an endless model loop.

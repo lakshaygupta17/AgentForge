@@ -82,6 +82,9 @@ DEVELOPER_TOOLS = (
     APPLY_UNIFIED_PATCH_TOOL,
     FINISH_DEVELOPMENT_TOOL,
 )
+EDIT_TOOL_NAMES = frozenset(
+    {APPLY_PATCH_TOOL.name, APPLY_UNIFIED_PATCH_TOOL.name}
+)
 
 
 class DeveloperAgent:
@@ -123,7 +126,11 @@ class DeveloperAgent:
                 "system",
                 "You are the Developer. Make the smallest grounded change that addresses "
                 "the task. You may only read files and submit validated exact replacements "
-                "or unified patches. Never claim a change that a patch tool did not confirm.",
+                "or unified patches. Treat the exploration report as leads rather than an "
+                "exhaustive file list: trace imported helpers when the behavior crosses "
+                "modules. Prefer small exact replacements over hand-counted unified hunks. "
+                "After a rejected edit, reread the exact current file before retrying. Never "
+                "claim a change that a patch tool did not confirm.",
             ),
             ChatMessage(
                 "user",
@@ -155,35 +162,11 @@ class DeveloperAgent:
             ),
         ]
 
+        rejected_edit = False
         for iteration in range(1, self._maximum_iterations + 1):
-            record_agent_event(
-                self._recorder,
-                state,
-                self.name,
-                "llm_requested",
-                {"iteration": iteration, "message_count": len(messages)},
+            calls = self._request_tools(
+                state, iteration, messages, DEVELOPER_TOOLS
             )
-            response = self._provider.chat(
-                messages, tools=DEVELOPER_TOOLS, tool_choice="required"
-            )
-            calls = response.message.tool_calls
-            record_agent_event(
-                self._recorder,
-                state,
-                self.name,
-                "llm_responded",
-                {
-                    "iteration": iteration,
-                    "model": response.model,
-                    "tool_call_count": len(calls),
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                },
-            )
-            if not calls:
-                raise AgentProtocolError("Developer must call a tool")
-            messages.append(response.message)
 
             finish_calls = [call for call in calls if call.name == FINISH_DEVELOPMENT_TOOL.name]
             if finish_calls:
@@ -194,16 +177,154 @@ class DeveloperAgent:
                 return self._finish(state, finish_calls[0], starting_patch_count)
 
             for call in calls:
-                messages.append(self._execute_tool(state, iteration, call))
+                tool_message, succeeded = self._execute_tool(state, iteration, call)
+                messages.append(tool_message)
+                if call.name in EDIT_TOOL_NAMES and not succeeded:
+                    rejected_edit = True
+                    messages.append(
+                        ChatMessage(
+                            "system",
+                            "The previous edit was rejected and changed nothing. Reread the "
+                            "target file, copy the smallest unique current text exactly, and "
+                            "retry with apply_patch. Do not repeat a rejected patch.",
+                        )
+                    )
+
+        next_iteration = self._maximum_iterations + 1
+        if self._editor.patch_count == starting_patch_count and rejected_edit:
+            messages.append(
+                ChatMessage(
+                    "system",
+                    "All regular development turns are exhausted. This is one bounded "
+                    "correction-only retry. Using file content already observed, submit "
+                    "exactly one minimal apply_patch or apply_unified_patch call. No read or "
+                    "report tool is available on this turn.",
+                )
+            )
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "development_correction_retry",
+                {"iteration": next_iteration},
+            )
+            calls = self._request_tools(
+                state,
+                next_iteration,
+                messages,
+                (APPLY_PATCH_TOOL, APPLY_UNIFIED_PATCH_TOOL),
+            )
+            if len(calls) == 1 and calls[0].name in EDIT_TOOL_NAMES:
+                tool_message, _ = self._execute_tool(
+                    state, next_iteration, calls[0]
+                )
+                messages.append(tool_message)
+            else:
+                self._reject_unavailable_calls(
+                    state,
+                    next_iteration,
+                    calls,
+                    "Correction permits exactly one patch tool call",
+                )
+            next_iteration += 1
+
+        if self._editor.patch_count > starting_patch_count:
+            messages.append(
+                ChatMessage(
+                    "system",
+                    "A validated patch has been applied. This is the report-only finalization "
+                    "turn. Call finish_development exactly once and report precisely the "
+                    "files confirmed by the patch tool.",
+                )
+            )
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "development_finalization_required",
+                {"iteration": next_iteration},
+            )
+            calls = self._request_tools(
+                state,
+                next_iteration,
+                messages,
+                (FINISH_DEVELOPMENT_TOOL,),
+            )
+            if len(calls) == 1 and calls[0].name == FINISH_DEVELOPMENT_TOOL.name:
+                return self._finish(state, calls[0], starting_patch_count)
+            self._reject_unavailable_calls(
+                state,
+                next_iteration,
+                calls,
+                "Finalization permits exactly one finish_development call",
+            )
 
         return AgentResult(
             False,
             "Developer reached its iteration limit without submitting a change report",
         )
 
+    def _request_tools(
+        self,
+        state: WorkflowState,
+        iteration: int,
+        messages: list[ChatMessage],
+        tools: tuple[ToolDefinition, ...],
+    ) -> tuple[ToolCall, ...]:
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "llm_requested",
+            {"iteration": iteration, "message_count": len(messages)},
+        )
+        response = self._provider.chat(messages, tools=tools, tool_choice="required")
+        calls = response.message.tool_calls
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "llm_responded",
+            {
+                "iteration": iteration,
+                "model": response.model,
+                "tool_call_count": len(calls),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        )
+        if not calls:
+            raise AgentProtocolError("Developer must call a tool")
+        messages.append(response.message)
+        return calls
+
+    def _reject_unavailable_calls(
+        self,
+        state: WorkflowState,
+        iteration: int,
+        calls: tuple[ToolCall, ...],
+        reason: str,
+    ) -> None:
+        for call in calls:
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "tool_requested",
+                {"iteration": iteration, "tool": call.name},
+            )
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "tool_rejected",
+                {"iteration": iteration, "tool": call.name, "reason": reason},
+            )
+
     def _execute_tool(
         self, state: WorkflowState, iteration: int, call: ToolCall
-    ) -> ChatMessage:
+    ) -> tuple[ChatMessage, bool]:
         record_agent_event(
             self._recorder,
             state,
@@ -248,8 +369,11 @@ class DeveloperAgent:
                 "tool_rejected",
                 {"iteration": iteration, "tool": call.name, "reason": str(error)},
             )
-        return ChatMessage(
-            "tool", json.dumps(payload, ensure_ascii=False), tool_call_id=call.id
+        return (
+            ChatMessage(
+                "tool", json.dumps(payload, ensure_ascii=False), tool_call_id=call.id
+            ),
+            bool(payload["ok"]),
         )
 
     def _finish(

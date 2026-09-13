@@ -241,6 +241,10 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             ).run(state)
 
         self.assertTrue(result.success)
+        self.assertIn(
+            "Trace imports and function calls",
+            provider.requests[0].messages[0].content or "",
+        )
         self.assertEqual(
             tuple(tool.name for tool in provider.requests[-1].tools),
             ("finish_exploration",),

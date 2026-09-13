@@ -145,6 +145,10 @@ class RepositoryExplorerAgent:
                 "system",
                 "You are the Repository Explorer. Use only the supplied read-only tools. "
                 "Ground every finding in files you actually inspect. Never invent paths. "
+                "Trace imports and function calls from the primary implementation into "
+                "helper modules, and inspect the task brief and tests when present. Include "
+                "every inspected file that may require a change in relevant_files; do not "
+                "assume the first failing or coordinating file contains every defect. "
                 "Finish with exactly one finish_exploration call.",
             ),
             ChatMessage(
