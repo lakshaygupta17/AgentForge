@@ -185,7 +185,9 @@ The Developer can now also submit the familiar “unified diff” format used by
 
 The Tester asks for a structured command, such as Python plus `-m unittest`. AgentForge turns that into an `ActionRequest`, sends it through the security policy, and executes it through the configured sandbox. Standard output, errors, exit code, duration, timeout, and truncation status come back as evidence.
 
-The Tester may only finish after a real command completed. If it reports success when the exit code says failure—or failure when execution actually passed—AgentForge rejects the model response. This keeps the recorded result tied to machine evidence rather than model confidence.
+The Tester may only finish after a real command completed. Before execution it is offered only the test-running tool. As soon as one command completes—whether it passes or fails—the next turn offers only the reporting tool. This prevents the Tester from replacing a meaningful failure with an easier command that happens to exit successfully. Commands rejected by policy do not count as executions and can be corrected within the normal turn limit.
+
+If the Tester reports success when the exit code says failure—or failure when execution actually passed—AgentForge rejects the model response. The Debugger is started only when the current Tester run returns a genuine failed report containing its command and output. Missing or stale reports stop with a clear error instead of sending the Debugger evidence it cannot trust.
 
 ## 7.5 What happens when tests fail?
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from agentforge.agents.base import Agent, AgentResult
-from agentforge.agents.models import ReviewReport
+from agentforge.agents.models import ReviewReport, TestReport
 from agentforge.agents.reviewer import REVIEW_ARTIFACT
+from agentforge.agents.tester import TEST_ARTIFACT
 from agentforge.core.approval import ApprovalCheckpoint
 from agentforge.core.models import Task, WorkflowState
 from agentforge.telemetry.trajectory import TrajectoryEvent, TrajectoryRecorder
@@ -108,6 +109,20 @@ class RepairOrchestrator:
                     )
                     continue
                 return self._finish(state)
+
+            test_report = testing.artifacts.get(TEST_ARTIFACT)
+            if not isinstance(test_report, TestReport) or test_report.passed:
+                reason = (
+                    "Tester stopped without a verified failed TestReport; "
+                    "Debugger was not started"
+                )
+                self._record(
+                    state,
+                    "testing_protocol_failed",
+                    "orchestrator",
+                    {"attempt": attempt, "reason": reason},
+                )
+                return self._fail(state, reason)
 
             self._record(
                 state,

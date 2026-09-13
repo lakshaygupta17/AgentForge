@@ -48,7 +48,8 @@ FINISH_TESTING_TOOL = ToolDefinition(
         "additionalProperties": False,
     },
 )
-TESTER_TOOLS = (RUN_TESTS_TOOL, FINISH_TESTING_TOOL)
+TEST_EXECUTION_TOOLS = (RUN_TESTS_TOOL,)
+TEST_REPORT_TOOLS = (FINISH_TESTING_TOOL,)
 
 
 class TesterAgent:
@@ -114,8 +115,11 @@ class TesterAgent:
         messages: list[ChatMessage] = [
             ChatMessage(
                 "system",
-                "You are the Tester. Run focused tests through run_tests. Never infer a "
-                "pass: finish_testing must agree with the most recent execution result.",
+                "You are the Tester. Run the broadest relevant repository acceptance suite "
+                "through run_tests, following test instructions or project configuration "
+                "when available. Do not replace a failing suite with a narrower or unrelated "
+                "command merely to obtain exit code zero. Never infer a pass: finish_testing "
+                "must agree with the completed execution result.",
             ),
             ChatMessage(
                 "user",
@@ -134,7 +138,7 @@ class TesterAgent:
                 {"iteration": iteration, "message_count": len(messages)},
             )
             response = self._provider.chat(
-                messages, tools=TESTER_TOOLS, tool_choice="required"
+                messages, tools=TEST_EXECUTION_TOOLS, tool_choice="required"
             )
             calls = response.message.tool_calls
             record_agent_event(
@@ -156,8 +160,6 @@ class TesterAgent:
             call = calls[0]
             messages.append(response.message)
 
-            if call.name == FINISH_TESTING_TOOL.name:
-                return self._finish(state, call, last_request, last_result)
             if call.name != RUN_TESTS_TOOL.name:
                 raise AgentProtocolError(f"Tester called unexpected tool '{call.name}'")
 
@@ -237,11 +239,88 @@ class TesterAgent:
                     tool_call_id=call.id,
                 )
             )
+            if last_request is not None and last_result is not None:
+                return self._request_final_report(
+                    state,
+                    messages,
+                    iteration + 1,
+                    last_request,
+                    last_result,
+                )
 
         return AgentResult(
             False,
             "Tester reached its iteration limit without reporting a verified result",
         )
+
+    def _request_final_report(
+        self,
+        state: WorkflowState,
+        messages: list[ChatMessage],
+        iteration: int,
+        request: ActionRequest,
+        result: ExecutionResult,
+    ) -> AgentResult:
+        messages.append(
+            ChatMessage(
+                "system",
+                "The test command completed. Report that exact result now with one "
+                "finish_testing call. No additional or narrower test command is available.",
+            )
+        )
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "testing_finalization_required",
+            {"iteration": iteration},
+        )
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "llm_requested",
+            {"iteration": iteration, "message_count": len(messages)},
+        )
+        response = self._provider.chat(
+            messages,
+            tools=TEST_REPORT_TOOLS,
+            tool_choice="required",
+        )
+        calls = response.message.tool_calls
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "llm_responded",
+            {
+                "iteration": iteration,
+                "model": response.model,
+                "tool_call_count": len(calls),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        )
+        if len(calls) != 1 or calls[0].name != FINISH_TESTING_TOOL.name:
+            reason = "Testing finalization permits exactly one finish_testing call"
+            for call in calls:
+                record_agent_event(
+                    self._recorder,
+                    state,
+                    self.name,
+                    "tool_requested",
+                    {"iteration": iteration, "tool": call.name},
+                )
+                record_agent_event(
+                    self._recorder,
+                    state,
+                    self.name,
+                    "tool_rejected",
+                    {"iteration": iteration, "tool": call.name, "reason": reason},
+                )
+            return AgentResult(False, reason)
+        return self._finish(state, calls[0], request, result)
 
     def _request_from_call(self, call: ToolCall) -> ActionRequest:
         executable = call.arguments.get("executable")

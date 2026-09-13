@@ -179,6 +179,108 @@ class RepairWorkflowTests(TestCase):
             with self.assertRaisesRegex(RuntimeError, "does not match"):
                 agent.run(state)
 
+    def test_tester_reports_a_valid_execution_after_rejected_command_attempts(self) -> None:
+        with LocalSandbox() as sandbox:
+            (sandbox.workspace / "test_sample.py").write_text(
+                "from unittest import TestCase\n\n"
+                "class SampleTests(TestCase):\n"
+                "    def test_ok(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            state = WorkflowState(Task("Run the acceptance suite"))
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
+                "changed", ("test_sample.py",), 1
+            )
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "rejected",
+                        "run_tests",
+                        {"executable": "python;echo", "arguments": ["unsafe"]},
+                    ),
+                    tool_response(
+                        "run",
+                        "run_tests",
+                        {
+                            "executable": sys.executable,
+                            "arguments": ["-B", "-m", "unittest", "discover", "-q"],
+                        },
+                    ),
+                    tool_response(
+                        "finish",
+                        "finish_testing",
+                        {"passed": True, "summary": "Acceptance suite passed"},
+                    ),
+                ]
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = AgentTester(
+                provider,
+                sandbox,
+                SecurityPolicy(),
+                recorder=recorder,
+                maximum_iterations=2,
+            ).run(state)
+
+            self.assertTrue(result.success)
+            report = result.artifacts[TEST_ARTIFACT]
+            self.assertIsInstance(report, AgentTestReport)
+            self.assertTrue(report.passed)
+            self.assertEqual(
+                tuple(tool.name for tool in provider.requests[-1].tools),
+                ("finish_testing",),
+            )
+            event_types = [event.event_type for event in recorder.events]
+            self.assertIn("test_execution_rejected", event_types)
+            self.assertIn("testing_finalization_required", event_types)
+
+    def test_tester_cannot_replace_completed_failure_with_narrower_command(self) -> None:
+        with LocalSandbox() as sandbox:
+            state = WorkflowState(Task("Run the acceptance suite"))
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
+                "changed", ("file.py",), 1
+            )
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "failed-run",
+                        "run_tests",
+                        {
+                            "executable": sys.executable,
+                            "arguments": ["-c", "raise SystemExit(1)"],
+                        },
+                    ),
+                    tool_response(
+                        "improper-rerun",
+                        "run_tests",
+                        {
+                            "executable": sys.executable,
+                            "arguments": ["-c", "raise SystemExit(0)"],
+                        },
+                    ),
+                ]
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = AgentTester(
+                provider,
+                sandbox,
+                SecurityPolicy(),
+                recorder=recorder,
+            ).run(state)
+
+            self.assertFalse(result.success)
+            self.assertNotIn(TEST_ARTIFACT, result.artifacts)
+            self.assertEqual(
+                tuple(tool.name for tool in provider.requests[-1].tools),
+                ("finish_testing",),
+            )
+            self.assertIn(
+                "tool_rejected", [event.event_type for event in recorder.events]
+            )
+
 
 class RepositoryEditorTests(TestCase):
     def test_exact_patch_accepts_lf_text_and_preserves_crlf_file(self) -> None:

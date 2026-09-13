@@ -74,7 +74,12 @@ class EvidenceBudgetingTests(TestCase):
             maximum_tool_observation_characters=300,
         ).run(state)
 
-        observation = provider.requests[1].messages[-1].content or ""
+        tool_messages = [
+            message
+            for message in provider.requests[1].messages
+            if message.role == "tool"
+        ]
+        observation = tool_messages[-1].content or ""
         self.assertTrue(result.success)
         self.assertLessEqual(len(observation), 300)
         self.assertIn('"truncated": true', observation)

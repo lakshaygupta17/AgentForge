@@ -218,9 +218,9 @@ fails closed. Rejection feedback tells the Developer to reread the file and use 
 small exact replacement, while Explorer and Developer prompts explicitly trace
 imported helper modules for multi-file defects.
 
-The Tester converts a structured model tool call into an `ActionRequest`. That request goes through `SecurityPolicy` and then the selected `Sandbox`; the agent never calls a process API itself. Its final pass/fail claim must exactly match the last execution result.
+The Tester converts a structured model tool call into an `ActionRequest`. That request goes through `SecurityPolicy` and then the selected `Sandbox`; the agent never calls a process API itself. Once one command actually executes, the next turn exposes only `finish_testing`, and its pass/fail claim must exactly match that result. It cannot hide a broad failing suite by running a narrower command afterward. Rejected commands may be corrected within the normal bound because they produced no execution evidence.
 
-When tests fail, `RepairOrchestrator` sends their command, exit status, stdout, and stderr to the Debugger. The resulting structured diagnosis becomes context for the next Developer attempt. A configurable repair-attempt limit prevents an endless model loop.
+When tests fail, `RepairOrchestrator` sends their command, exit status, stdout, and stderr to the Debugger. The route is available only when the current Tester invocation returned a validated failed `TestReport`; a missing report or stale artifact stops with a clear protocol failure instead of crashing the Debugger. The resulting structured diagnosis becomes context for the next Developer attempt. A configurable repair-attempt limit prevents an endless model loop.
 
 After tests pass, the Reviewer receives the complete diff and test evidence. It can accept the patch or reject it with concrete issues. A rejected review is a failed workflow; AgentForge never silently labels it successful.
 

@@ -8,6 +8,7 @@ from agentforge.agents.debugger import DIAGNOSIS_ARTIFACT, DebuggerAgent
 from agentforge.agents.developer import DeveloperAgent
 from agentforge.agents.explorer import RepositoryExplorerAgent
 from agentforge.agents.models import Diagnosis, ReviewReport
+from agentforge.agents.models import TestReport as AgentTestReport
 from agentforge.agents.planner import PlannerAgent
 from agentforge.agents.reviewer import REVIEW_ARTIFACT, ReviewerAgent
 from agentforge.agents.tester import TesterAgent as AgentTester
@@ -183,10 +184,19 @@ class RepairRetryWorkflowTests(TestCase):
         class FailedTester:
             name = "tester"
 
-            def run(self, state: object) -> object:
+            def run(self, state: object) -> AgentResult:
                 from agentforge.agents.base import AgentResult
 
-                return AgentResult(False, "tests failed")
+                report = AgentTestReport(
+                    False,
+                    "tests failed",
+                    ("python", "-m", "unittest"),
+                    1,
+                    False,
+                    "",
+                    "failure",
+                )
+                return AgentResult(False, "tests failed", {"tests": report})
 
         class MustNotRun:
             name = "debugger"
@@ -210,6 +220,55 @@ class RepairRetryWorkflowTests(TestCase):
 
         self.assertTrue(state.failed)
         self.assertIn("after 1 repair attempts", state.failure_reason or "")
+
+    def test_missing_failed_test_report_stops_before_debugger(self) -> None:
+        class SuccessfulAgent:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def run(self, state: WorkflowState) -> AgentResult:
+                return AgentResult(True, f"{self.name} complete")
+
+        class MissingReportTester:
+            name = "tester"
+
+            def run(self, state: WorkflowState) -> AgentResult:
+                state.artifacts["tests"] = AgentTestReport(
+                    False,
+                    "stale failure",
+                    ("python", "old_test.py"),
+                    1,
+                    False,
+                    "",
+                    "old failure",
+                )
+                return AgentResult(False, "Tester exhausted its report turns")
+
+        class MustNotRunDebugger:
+            name = "debugger"
+
+            def run(self, state: WorkflowState) -> AgentResult:
+                raise AssertionError("Debugger must not run without a failed TestReport")
+
+        recorder = InMemoryTrajectoryRecorder()
+        workflow = RepairOrchestrator(
+            planner=SuccessfulAgent("planner"),
+            explorer=SuccessfulAgent("explorer"),
+            developer=SuccessfulAgent("developer"),
+            tester=MissingReportTester(),
+            debugger=MustNotRunDebugger(),
+            reviewer=SuccessfulAgent("reviewer"),
+            recorder=recorder,
+            maximum_repair_attempts=2,
+        )
+
+        state = workflow.run(Task("Do not misroute a missing test report"))
+
+        self.assertTrue(state.failed)
+        self.assertIn("without a verified failed TestReport", state.failure_reason or "")
+        event_types = [event.event_type for event in recorder.events]
+        self.assertIn("testing_protocol_failed", event_types)
+        self.assertNotIn("tests_failed", event_types)
 
     def test_rejected_review_feedback_reaches_next_development_attempt(self) -> None:
         class SuccessfulAgent:

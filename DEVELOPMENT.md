@@ -712,3 +712,13 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Strengthened Explorer guidance to include every inspected helper module that may need a change rather than reporting only the coordinating file.
 - Added regression coverage for LF-to-CRLF and CRLF-to-LF replacements, successful rejected-patch recovery, report-only finalization, and failure after one invalid correction.
 - Final offline verification: 203 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.
+
+### 2026-09-13 — Tester evidence and Debugger routing hardening
+
+- Diagnosed the next hosted checkout attempt: Developer successfully patched shipping and discount rounding, and the first broad test run correctly failed because tax exemption remained broken.
+- Found that Tester spent later turns proposing policy-rejected commands, then executed an exit-zero command on its last turn without enough room to submit `finish_testing`.
+- Split Tester into two enforced phases: before execution it receives only `run_tests`; after the first completed execution it receives only `finish_testing` on a separate report turn, even when execution used the last regular attempt.
+- Instructed Tester to choose the broadest relevant acceptance suite and prohibited substituting a narrower command merely to obtain exit code zero.
+- Required the repair orchestrator to obtain a validated failed `TestReport` from the current Tester result before starting Debugger. Missing and stale artifacts now produce a clear fail-closed protocol error.
+- Added regression tests for rejected commands followed by last-attempt execution, report-only finalization, attempted narrower reruns, absent reports, and stale-report routing.
+- Final offline verification: 206 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.
