@@ -65,14 +65,15 @@ APPLY_UNIFIED_PATCH_TOOL = ToolDefinition(
 )
 FINISH_DEVELOPMENT_TOOL = ToolDefinition(
     "finish_development",
-    "Finish after applying the intended patch and summarize the changes.",
+    "Finish after applying the intended patch and summarize the changes. AgentForge "
+    "derives changed files from confirmed patch-tool evidence.",
     {
         "type": "object",
         "properties": {
             "summary": {"type": "string"},
             "changed_files": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["summary", "changed_files"],
+        "required": ["summary"],
         "additionalProperties": False,
     },
 )
@@ -163,6 +164,7 @@ class DeveloperAgent:
         ]
 
         rejected_edit = False
+        attempt_changed_files: set[str] = set()
         for iteration in range(1, self._maximum_iterations + 1):
             calls = self._request_tools(
                 state, iteration, messages, DEVELOPER_TOOLS
@@ -174,11 +176,19 @@ class DeveloperAgent:
                     raise AgentProtocolError(
                         "finish_development cannot be combined with another tool call"
                     )
-                return self._finish(state, finish_calls[0], starting_patch_count)
+                return self._finish(
+                    state,
+                    finish_calls[0],
+                    starting_patch_count,
+                    attempt_changed_files,
+                )
 
             for call in calls:
-                tool_message, succeeded = self._execute_tool(state, iteration, call)
+                tool_message, succeeded, changed_files = self._execute_tool(
+                    state, iteration, call
+                )
                 messages.append(tool_message)
+                attempt_changed_files.update(changed_files)
                 if call.name in EDIT_TOOL_NAMES and not succeeded:
                     rejected_edit = True
                     messages.append(
@@ -215,10 +225,11 @@ class DeveloperAgent:
                 (APPLY_PATCH_TOOL, APPLY_UNIFIED_PATCH_TOOL),
             )
             if len(calls) == 1 and calls[0].name in EDIT_TOOL_NAMES:
-                tool_message, _ = self._execute_tool(
+                tool_message, _, changed_files = self._execute_tool(
                     state, next_iteration, calls[0]
                 )
                 messages.append(tool_message)
+                attempt_changed_files.update(changed_files)
             else:
                 self._reject_unavailable_calls(
                     state,
@@ -233,8 +244,8 @@ class DeveloperAgent:
                 ChatMessage(
                     "system",
                     "A validated patch has been applied. This is the report-only finalization "
-                    "turn. Call finish_development exactly once and report precisely the "
-                    "files confirmed by the patch tool.",
+                    "turn. Call finish_development exactly once with a concise summary. "
+                    "AgentForge will attach the files confirmed by the patch tool.",
                 )
             )
             record_agent_event(
@@ -251,7 +262,12 @@ class DeveloperAgent:
                 (FINISH_DEVELOPMENT_TOOL,),
             )
             if len(calls) == 1 and calls[0].name == FINISH_DEVELOPMENT_TOOL.name:
-                return self._finish(state, calls[0], starting_patch_count)
+                return self._finish(
+                    state,
+                    calls[0],
+                    starting_patch_count,
+                    attempt_changed_files,
+                )
             self._reject_unavailable_calls(
                 state,
                 next_iteration,
@@ -324,7 +340,7 @@ class DeveloperAgent:
 
     def _execute_tool(
         self, state: WorkflowState, iteration: int, call: ToolCall
-    ) -> tuple[ChatMessage, bool]:
+    ) -> tuple[ChatMessage, bool, frozenset[str]]:
         record_agent_event(
             self._recorder,
             state,
@@ -332,6 +348,7 @@ class DeveloperAgent:
             "tool_requested",
             {"iteration": iteration, "tool": call.name},
         )
+        confirmed_files: frozenset[str] = frozenset()
         try:
             if call.name == DEVELOPER_READ_TOOL.name:
                 path = call.arguments.get("path")
@@ -339,12 +356,16 @@ class DeveloperAgent:
                     raise RepositoryToolError("'path' must be text")
                 result: object = self._editor.inspector.read_file(path)
             elif call.name == APPLY_PATCH_TOOL.name:
-                result = self._editor.apply_patch(call.arguments)
+                patch_result = self._editor.apply_patch(call.arguments)
+                result = patch_result
+                confirmed_files = self._patch_result_files(patch_result)
             elif call.name == APPLY_UNIFIED_PATCH_TOOL.name:
                 patch_text = call.arguments.get("patch")
                 if not isinstance(patch_text, str):
                     raise RepositoryEditError("Unified patch must be text")
-                result = self._editor.apply_unified_patch(patch_text)
+                patch_result = self._editor.apply_unified_patch(patch_text)
+                result = patch_result
+                confirmed_files = self._patch_result_files(patch_result)
             else:
                 raise RepositoryEditError(f"Unknown developer tool '{call.name}'")
             payload: dict[str, Any] = {"ok": True, "result": result}
@@ -374,33 +395,55 @@ class DeveloperAgent:
                 "tool", json.dumps(payload, ensure_ascii=False), tool_call_id=call.id
             ),
             bool(payload["ok"]),
+            confirmed_files,
         )
 
+    @staticmethod
+    def _patch_result_files(result: dict[str, object]) -> frozenset[str]:
+        raw_files = result.get("changed_files")
+        if not isinstance(raw_files, list) or not all(
+            isinstance(path, str) and path for path in raw_files
+        ):
+            raise RepositoryEditError("Patch tool returned invalid changed_files evidence")
+        return frozenset(raw_files)
+
     def _finish(
-        self, state: WorkflowState, call: ToolCall, starting_patch_count: int
+        self,
+        state: WorkflowState,
+        call: ToolCall,
+        starting_patch_count: int,
+        attempt_changed_files: set[str],
     ) -> AgentResult:
         summary = call.arguments.get("summary")
         raw_files = call.arguments.get("changed_files")
         if not isinstance(summary, str) or not summary.strip():
             raise AgentProtocolError("Development summary must be non-empty text")
-        if not isinstance(raw_files, list) or not all(
-            isinstance(path, str) and path.strip() for path in raw_files
-        ):
-            raise AgentProtocolError("changed_files must be a list of paths")
-        reported_files = {path.strip() for path in raw_files}
         if self._editor.patch_count == starting_patch_count:
             raise AgentProtocolError("Developer finished without an applied patch")
-        if not self._editor.changed_files:
-            raise AgentProtocolError("Developer's patches leave no effective changes")
-        if reported_files != self._editor.changed_files:
-            raise AgentProtocolError(
-                "Developer report does not match the files changed by apply_patch"
-            )
+        if not attempt_changed_files:
+            raise AgentProtocolError("Developer has no confirmed files for this attempt")
+        if isinstance(raw_files, list):
+            reported_files = {
+                path.strip()
+                for path in raw_files
+                if isinstance(path, str) and path.strip()
+            }
+            if reported_files != attempt_changed_files:
+                record_agent_event(
+                    self._recorder,
+                    state,
+                    self.name,
+                    "development_report_reconciled",
+                    {
+                        "reported_file_count": len(reported_files),
+                        "confirmed_file_count": len(attempt_changed_files),
+                    },
+                )
 
         report = DevelopmentReport(
             summary=summary.strip(),
-            changed_files=tuple(sorted(reported_files)),
-            patch_count=self._editor.patch_count,
+            changed_files=tuple(sorted(attempt_changed_files)),
+            patch_count=self._editor.patch_count - starting_patch_count,
         )
         record_agent_event(
             self._recorder,

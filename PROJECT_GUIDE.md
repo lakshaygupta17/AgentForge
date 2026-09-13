@@ -326,6 +326,13 @@ For the checkout challenge, that means treating `checkout.py`, `discounts.py`,
 and `taxes.py` as one behavior rather than assuming every mistake lives in the
 main checkout function.
 
+During a retry, two file lists have different jobs. The Reviewer needs the full
+list accumulated across the whole repair, while the current Developer report
+should mention only files changed in that attempt. AgentForge now builds the
+Developer list directly from accepted patch-tool receipts. The model supplies a
+human-readable summary but cannot accidentally fail the run by repeating an old
+file name or omitting a newly confirmed one.
+
 ## 8. How the pieces fit together
 
 ```text

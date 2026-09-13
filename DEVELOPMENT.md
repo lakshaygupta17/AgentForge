@@ -722,3 +722,13 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Required the repair orchestrator to obtain a validated failed `TestReport` from the current Tester result before starting Debugger. Missing and stale artifacts now produce a clear fail-closed protocol error.
 - Added regression tests for rejected commands followed by last-attempt execution, report-only finalization, attempted narrower reruns, absent reports, and stale-report routing.
 - Final offline verification: 206 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.
+
+### 2026-09-13 — Attempt-scoped Developer reports
+
+- Diagnosed the third hosted checkout attempt: shipping and tax fixes were accepted, the broad suite exposed the remaining discount defect, Debugger produced grounded evidence, and the second Developer successfully patched the discount module.
+- Found that `RepositoryEditor.changed_files` intentionally accumulates the final review diff across attempts, but Developer incorrectly used that cumulative set to validate a single-attempt report.
+- Accumulate accepted patch-tool file receipts inside each `DeveloperAgent.run` invocation and use them as the authoritative `DevelopmentReport.changed_files` value.
+- Report per-attempt patch counts while preserving the editor's cumulative changed-file set for final review.
+- Made the model responsible only for the human-readable development summary. A legacy model-supplied file list is compared for telemetry and reconciled to confirmed tool evidence rather than failing the workflow.
+- Added a two-attempt, two-file regression proving the second report contains only its own file, a mismatched legacy list cannot override evidence, and the cumulative review set still contains both files.
+- Final offline verification: 207 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.

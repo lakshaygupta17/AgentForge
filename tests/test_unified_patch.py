@@ -105,7 +105,7 @@ class UnifiedPatchTests(TestCase):
                     tool_response(
                         "finish",
                         "finish_development",
-                        {"summary": "Enabled the feature", "changed_files": ["app.py"]},
+                        {"summary": "Enabled the feature"},
                     ),
                 ]
             )
@@ -226,3 +226,89 @@ class UnifiedPatchTests(TestCase):
             self.assertFalse(result.success)
             self.assertEqual(len(provider.requests), 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "enabled = False\n")
+
+    def test_developer_report_is_scoped_to_the_current_repair_attempt(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "shipping.py").write_text("free = False\n", encoding="utf-8")
+            (root / "discounts.py").write_text("rounded = False\n", encoding="utf-8")
+            editor = RepositoryEditor(RepositoryInspector(root))
+            state = WorkflowState(Task("Repair checkout behavior"))
+            state.artifacts[PLAN_ARTIFACT] = Plan(
+                ("Repair both modules",), "Multiple attempts may be needed"
+            )
+            state.artifacts[EXPLORATION_ARTIFACT] = ExplorationReport(
+                "Found checkout helpers",
+                ("shipping.py", "discounts.py"),
+                ("Both flags are incorrect",),
+            )
+            first_provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "shipping-patch",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "shipping.py",
+                                    "old_text": "free = False",
+                                    "new_text": "free = True",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "shipping-report",
+                        "finish_development",
+                        {
+                            "summary": "Repaired shipping",
+                            "changed_files": ["shipping.py"],
+                        },
+                    ),
+                ]
+            )
+            second_provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "discount-patch",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "discounts.py",
+                                    "old_text": "rounded = False",
+                                    "new_text": "rounded = True",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "discount-report",
+                        "finish_development",
+                        {
+                            "summary": "Repaired rounding",
+                            "changed_files": ["shipping.py"],
+                        },
+                    ),
+                ]
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            first = DeveloperAgent(first_provider, editor).run(state)
+            second = DeveloperAgent(
+                second_provider, editor, recorder=recorder
+            ).run(state)
+
+            self.assertTrue(first.success)
+            self.assertTrue(second.success)
+            first_report = first.artifacts[DEVELOPMENT_ARTIFACT]
+            second_report = second.artifacts[DEVELOPMENT_ARTIFACT]
+            self.assertEqual(first_report.changed_files, ("shipping.py",))
+            self.assertEqual(second_report.changed_files, ("discounts.py",))
+            self.assertEqual(first_report.patch_count, 1)
+            self.assertEqual(second_report.patch_count, 1)
+            self.assertEqual(editor.changed_files, {"shipping.py", "discounts.py"})
+            self.assertIn(
+                "development_report_reconciled",
+                [event.event_type for event in recorder.events],
+            )

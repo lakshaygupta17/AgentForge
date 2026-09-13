@@ -218,6 +218,13 @@ fails closed. Rejection feedback tells the Developer to reread the file and use 
 small exact replacement, while Explorer and Developer prompts explicitly trace
 imported helper modules for multi-file defects.
 
+The structured list of changed files is derived from successful patch-tool
+results for the current repair attempt, not copied from the model and not taken
+from the editor's cumulative review diff. This keeps retries separate: a second
+Developer may accurately report only its new file while the Reviewer still sees
+the complete change across every attempt. A legacy model-supplied list is
+reconciled to the confirmed evidence rather than aborting the workflow.
+
 The Tester converts a structured model tool call into an `ActionRequest`. That request goes through `SecurityPolicy` and then the selected `Sandbox`; the agent never calls a process API itself. Once one command actually executes, the next turn exposes only `finish_testing`, and its pass/fail claim must exactly match that result. It cannot hide a broad failing suite by running a narrower command afterward. Rejected commands may be corrected within the normal bound because they produced no execution evidence.
 
 When tests fail, `RepairOrchestrator` sends their command, exit status, stdout, and stderr to the Debugger. The route is available only when the current Tester invocation returned a validated failed `TestReport`; a missing report or stale artifact stops with a clear protocol failure instead of crashing the Debugger. The resulting structured diagnosis becomes context for the next Developer attempt. A configurable repair-attempt limit prevents an endless model loop.
