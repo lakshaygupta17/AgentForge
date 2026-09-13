@@ -1,0 +1,51 @@
+version: 1
+
+commands:
+  maximum_timeout_seconds: 120
+  forbidden_executables:
+    - bash
+    - cmd
+    - cmd.exe
+    - mount
+    - powershell
+    - powershell.exe
+    - pwsh
+    - sh
+    - shutdown
+    - sudo
+    - su
+  allowed_environment_keys: []
+  allowed_git_subcommands:
+    - diff
+    - status
+
+resources:
+  maximum_cpu_count: 2
+  maximum_memory_mb: 2048
+  maximum_processes: 128
+  maximum_output_bytes: 1000000
+
+network:
+  allow: false
+  allowed_destinations: []
+
+filesystem:
+  readable_paths:
+    - "*"
+    - "**/*"
+  writable_paths:
+    - "*"
+    - "**/*"
+  denied_paths:
+    - ".env"
+    - "**/.env"
+    - ".env.development"
+    - ".env.local"
+    - ".env.production"
+    - "**/.env.development"
+    - "**/.env.local"
+    - "**/.env.production"
+    - "*.key"
+    - "*.pem"
+    - "**/*.key"
+    - "**/*.pem"
