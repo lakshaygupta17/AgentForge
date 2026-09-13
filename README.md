@@ -357,6 +357,24 @@ The output path must not exist and a failed workflow is not exported. The comple
 
 For a deliberately minimal end-to-end live check, `examples\live_smoke_fixture` contains two synthetic Python files and no user repository data. Use it as the workspace in the command above, choose `--sandbox-backend e2b`, and keep the two approval flags. This still sends that synthetic source to Hugging Face and E2B and may use account quota, so every repeat requires the user's explicit authorization for those destinations.
 
+For a more demanding repair, `examples\checkout_repair_fixture` is a six-file,
+dependency-free checkout system. Four of its eight acceptance tests fail because
+three defects interact across discount rounding, tax exemptions, and discounted
+free-shipping eligibility. `TASK.md` is the issue AgentForge should follow; the
+tests are the acceptance contract and must not be edited. This fixture is still
+synthetic, but a hosted run transmits it and consumes provider quota, so creating
+the fixture does not authorize a live run.
+
+```powershell
+agentforge live-repair `
+  --sandbox-backend e2b `
+  --workspace .\examples\checkout_repair_fixture `
+  --output .\artifacts\checkout-repaired `
+  --task "Read TASK.md and fix the checkout implementation without modifying tests" `
+  --allow-code-transmission `
+  --allow-sandbox-execution
+```
+
 To repeat only that minimal provider test deliberately:
 
 ```powershell

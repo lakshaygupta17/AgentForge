@@ -277,6 +277,26 @@ The local scheduler deliberately runs one job at a time and caps retained record
 
 We also added a tiny retrieval exam. Each question says which file should be found, and AgentForge measures whether text or symbol search places that file in the first few results. The report includes both the percentage of successful questions and how highly the right file ranked. A deliberately missed query remains visible, preventing an impressive average from hiding failures.
 
+## 7.15 What is the harder checkout repair fixture?
+
+The first live fixture is intentionally tiny: it proves that information can
+travel through the complete system. The checkout fixture asks a more useful
+question: can the agents understand several business rules spread across several
+files and repair only the incorrect parts?
+
+Imagine a shop receipt. One file represents products, one calculates discounts,
+one calculates tax, and one combines everything into the final bill. The fixture
+contains three realistic mistakes: it rounds some discounted prices down, taxes
+products that should be tax-free, and grants free shipping using the price before
+discounts. These mistakes can affect the same receipt, so AgentForge must inspect
+the evidence rather than guess from a single failed number.
+
+Eight dependency-free tests describe the expected behavior. The unmodified
+challenge deliberately passes four and fails four. Before introducing the bugs,
+the same tests were run against the correct reference implementation and all
+eight passed. That two-step check proves the fixture itself is coherent and that
+the failures were intentionally seeded.
+
 ## 8. How the pieces fit together
 
 ```text

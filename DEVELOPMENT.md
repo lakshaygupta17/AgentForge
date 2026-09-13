@@ -693,3 +693,11 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Added observer-redaction, benchmark-progress, service-stream, and dashboard-asset regression tests.
 - Visually verified an in-flight Tester stage and the completed three-case output histories in the local browser.
 - Final verification: 198 tests pass, three opt-in external tests skip, 17 subtests pass, JavaScript syntax passes, Ruff passes, and strict MyPy passes across 69 source files.
+
+### 2026-09-13 — Multi-file checkout repair challenge
+
+- Added a six-file synthetic checkout fixture with an issue-style `TASK.md`, four implementation modules, and eight dependency-free acceptance tests.
+- Covered per-line half-up discount rounding, taxable versus exempt merchandise, discounted free-shipping eligibility, empty baskets, and invalid inputs.
+- Proved the acceptance contract first against the correct reference implementation: all eight tests passed.
+- Seeded three independent defects across the discount, tax, and checkout modules. The final challenge passes four tests and fails four for the intended reasons.
+- Kept the fixture fully synthetic and dependency-free so it is suitable for the personal E2B Hobby workflow without exposing user code. No hosted inference or microVM run was performed as part of fixture creation.
