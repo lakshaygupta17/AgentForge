@@ -251,6 +251,81 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             [event.event_type for event in recorder.events],
         )
 
+    def test_explorer_recovers_when_final_turn_calls_wrong_tool(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            provider = MockLLMProvider(
+                [
+                    tool_response("wrong", "run_tests", {}),
+                    tool_response(
+                        "finish",
+                        "finish_exploration",
+                        {
+                            "summary": "Inspected the small repository",
+                            "relevant_files": ["app.py"],
+                            "findings": ["app.py contains the implementation"],
+                        },
+                    ),
+                ]
+            )
+            state = WorkflowState(
+                task=Task("Inspect app"),
+                artifacts={
+                    PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")
+                },
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = RepositoryExplorerAgent(
+                provider,
+                RepositoryInspector(root),
+                recorder=recorder,
+                maximum_iterations=1,
+            ).run(state)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(
+            tuple(tool.name for tool in provider.requests[-1].tools),
+            ("finish_exploration",),
+        )
+        event_types = [event.event_type for event in recorder.events]
+        self.assertIn("exploration_finalization_retry", event_types)
+        self.assertIn("tool_rejected", event_types)
+
+    def test_explorer_fails_closed_when_correction_retry_calls_wrong_tool(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            provider = MockLLMProvider(
+                [
+                    tool_response("wrong-1", "run_tests", {}),
+                    tool_response("wrong-2", "read_file", {"path": "app.py"}),
+                ]
+            )
+            state = WorkflowState(
+                task=Task("Inspect app"),
+                artifacts={
+                    PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")
+                },
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = RepositoryExplorerAgent(
+                provider,
+                RepositoryInspector(root),
+                recorder=recorder,
+                maximum_iterations=1,
+            ).run(state)
+
+        self.assertFalse(result.success)
+        self.assertEqual(len(provider.requests), 2)
+        event_types = [event.event_type for event in recorder.events]
+        self.assertEqual(event_types.count("tool_rejected"), 2)
+        self.assertIn("exploration_finalization_retry", event_types)
+        self.assertIn("exploration_limit_reached", event_types)
+
     def test_explorer_bounds_large_tool_observations_sent_back_to_model(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -156,14 +156,28 @@ class RepositoryExplorerAgent:
             ),
         ]
 
-        for iteration in range(1, self._maximum_iterations + 1):
+        finalization_retry_iteration = self._maximum_iterations + 1
+        for iteration in range(1, finalization_retry_iteration + 1):
             tools: tuple[ToolDefinition, ...] = self._tools
-            if iteration == self._maximum_iterations:
+            finalization_required = iteration >= self._maximum_iterations
+            if finalization_required:
+                if iteration == self._maximum_iterations:
+                    instruction = (
+                        "This is the final exploration turn. Stop inspecting and call "
+                        "finish_exploration now using only evidence already observed."
+                    )
+                    event_type = "exploration_finalization_required"
+                else:
+                    instruction = (
+                        "Your previous finalization response did not call exactly one "
+                        "finish_exploration tool. This is the single correction retry. "
+                        "Call finish_exploration now; no other tool is permitted."
+                    )
+                    event_type = "exploration_finalization_retry"
                 messages.append(
                     ChatMessage(
                         "system",
-                        "This is the final exploration turn. Stop inspecting and call "
-                        "finish_exploration now using only evidence already observed.",
+                        instruction,
                     )
                 )
                 tools = (FINISH_EXPLORATION_TOOL,)
@@ -171,7 +185,7 @@ class RepositoryExplorerAgent:
                     self._recorder,
                     state,
                     self.name,
-                    "exploration_finalization_required",
+                    event_type,
                     {"iteration": iteration},
                 )
             record_agent_event(
@@ -201,44 +215,51 @@ class RepositoryExplorerAgent:
                     "total_tokens": response.usage.total_tokens,
                 },
             )
-            if not calls:
+            if not calls and not finalization_required:
                 raise AgentProtocolError("Repository Explorer must call a tool")
             messages.append(response.message)
 
             finish_calls = [call for call in calls if call.name == FINISH_EXPLORATION_TOOL.name]
             if finish_calls:
                 if len(calls) != 1:
-                    raise AgentProtocolError(
-                        "finish_exploration cannot be combined with another tool call"
+                    if not finalization_required:
+                        raise AgentProtocolError(
+                            "finish_exploration cannot be combined with another tool call"
+                        )
+                else:
+                    report = self._build_report(finish_calls[0])
+                    state.memory.remember(
+                        "exploration",
+                        self.name,
+                        report.summary
+                        + "\n"
+                        + "\n".join(report.findings),
+                        priority=90,
                     )
-                report = self._build_report(finish_calls[0])
-                state.memory.remember(
-                    "exploration",
-                    self.name,
-                    report.summary
-                    + "\n"
-                    + "\n".join(report.findings),
-                    priority=90,
-                )
-                record_agent_event(
-                    self._recorder,
-                    state,
-                    self.name,
-                    "exploration_completed",
-                    {
-                        "iteration": iteration,
-                        "relevant_file_count": len(report.relevant_files),
-                        "finding_count": len(report.findings),
-                    },
-                )
-                return AgentResult(
-                    success=True,
-                    summary=(
-                        "Repository Explorer identified "
-                        f"{len(report.relevant_files)} relevant files"
-                    ),
-                    artifacts={EXPLORATION_ARTIFACT: report},
-                )
+                    record_agent_event(
+                        self._recorder,
+                        state,
+                        self.name,
+                        "exploration_completed",
+                        {
+                            "iteration": iteration,
+                            "relevant_file_count": len(report.relevant_files),
+                            "finding_count": len(report.findings),
+                        },
+                    )
+                    return AgentResult(
+                        success=True,
+                        summary=(
+                            "Repository Explorer identified "
+                            f"{len(report.relevant_files)} relevant files"
+                        ),
+                        artifacts={EXPLORATION_ARTIFACT: report},
+                    )
+
+            if finalization_required:
+                for call in calls:
+                    messages.append(self._reject_finalization_tool(state, iteration, call))
+                continue
 
             for call in calls:
                 messages.append(self._execute_tool(state, iteration, call))
@@ -248,13 +269,40 @@ class RepositoryExplorerAgent:
             state,
             self.name,
             "exploration_limit_reached",
-            {"maximum_iterations": self._maximum_iterations},
+            {
+                "maximum_iterations": self._maximum_iterations,
+                "finalization_attempts": 2,
+            },
         )
         return AgentResult(
             success=False,
             summary=(
                 "Repository Explorer reached its iteration limit without submitting a report"
             ),
+        )
+
+    def _reject_finalization_tool(
+        self, state: WorkflowState, iteration: int, call: ToolCall
+    ) -> ChatMessage:
+        reason = "Finalization permits only one finish_exploration call"
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "tool_requested",
+            {"iteration": iteration, "tool": call.name},
+        )
+        record_agent_event(
+            self._recorder,
+            state,
+            self.name,
+            "tool_rejected",
+            {"iteration": iteration, "tool": call.name, "reason": reason},
+        )
+        return ChatMessage(
+            "tool",
+            json.dumps({"ok": False, "error": reason}),
+            tool_call_id=call.id,
         )
 
     def _execute_tool(

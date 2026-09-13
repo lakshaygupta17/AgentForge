@@ -353,7 +353,7 @@ agentforge live-repair `
   --allow-sandbox-execution
 ```
 
-The output path must not exist and a failed workflow is not exported. The complete Hugging Face + E2B repair path was verified on 2026-09-13 against the two-file synthetic fixture below: Planner, Explorer, Developer, Tester, and Reviewer completed; the Debugger was not needed because the first repair passed. E2B tests passed, review accepted the minimal diff, and the filtered result was exported. The normal suite still never contacts either provider.
+The output path must not exist and a failed workflow is not exported. The complete Hugging Face + E2B repair path was verified on 2026-09-13 against the two-file synthetic fixture below: Planner, Explorer, Developer, Tester, and Reviewer completed; the Debugger was not needed because the first repair passed. E2B tests passed, review accepted the minimal diff, and the filtered result was exported. The normal suite still never contacts either provider. If the Explorer ignores its forced finalization tool and invents a different tool call, AgentForge rejects that call without executing it and grants exactly one correction-only retry before failing closed.
 
 For a deliberately minimal end-to-end live check, `examples\live_smoke_fixture` contains two synthetic Python files and no user repository data. Use it as the workspace in the command above, choose `--sandbox-backend e2b`, and keep the two approval flags. This still sends that synthetic source to Hugging Face and E2B and may use account quota, so every repeat requires the user's explicit authorization for those destinations.
 

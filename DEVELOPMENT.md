@@ -670,3 +670,13 @@ The entire Hugging Face + E2B Hobby repair path is now live verified. Docker `sb
 - Ran the complete test suite from that fresh clone with the original project-local virtual environment: 193 tests passed, three opt-in external tests skipped, and 17 subtests passed.
 
 The local workspace and private GitHub repository are now connected. Normal development can proceed through small commits on `main` or feature branches, while credentials and generated run data remain local.
+
+### 2026-09-13 — Explorer finalization recovery
+
+- Diagnosed the first repair launched from the fresh GitHub clone using its sanitized trajectory.
+- Confirmed that GitHub cloning, planning, and model inference succeeded; on Explorer iteration eight, the hosted model invented the Tester's `run_tests` tool even though AgentForge offered only `finish_exploration`.
+- Preserved the role boundary: an unadvertised finalization tool is recorded and rejected without execution.
+- Added exactly one correction-only model turn that again exposes only `finish_exploration` and explains the protocol error.
+- Kept the workflow bounded and fail-closed: a missing or invalid report on the correction retry ends exploration without modifying or exporting the repository.
+- Added regression tests for successful correction and repeated-invalid-tool failure.
+- Final offline verification: 195 tests pass, three opt-in external tests skip, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files.
