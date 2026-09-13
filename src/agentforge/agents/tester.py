@@ -261,48 +261,60 @@ class TesterAgent:
         request: ActionRequest,
         result: ExecutionResult,
     ) -> AgentResult:
-        messages.append(
-            ChatMessage(
-                "system",
-                "The test command completed. Report that exact result now with one "
-                "finish_testing call. No additional or narrower test command is available.",
+        for finalization_attempt in range(2):
+            current_iteration = iteration + finalization_attempt
+            if finalization_attempt == 0:
+                instruction = (
+                    "The test command completed. Report that exact result now with one "
+                    "finish_testing call. No additional or narrower test command is available."
+                )
+                event_type = "testing_finalization_required"
+            else:
+                instruction = (
+                    "Your previous report response did not call exactly one finish_testing "
+                    "tool. This is the single correction retry. Report the already completed "
+                    "test result now; no command tool is available."
+                )
+                event_type = "testing_finalization_retry"
+            messages.append(ChatMessage("system", instruction))
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                event_type,
+                {"iteration": current_iteration},
             )
-        )
-        record_agent_event(
-            self._recorder,
-            state,
-            self.name,
-            "testing_finalization_required",
-            {"iteration": iteration},
-        )
-        record_agent_event(
-            self._recorder,
-            state,
-            self.name,
-            "llm_requested",
-            {"iteration": iteration, "message_count": len(messages)},
-        )
-        response = self._provider.chat(
-            messages,
-            tools=TEST_REPORT_TOOLS,
-            tool_choice="required",
-        )
-        calls = response.message.tool_calls
-        record_agent_event(
-            self._recorder,
-            state,
-            self.name,
-            "llm_responded",
-            {
-                "iteration": iteration,
-                "model": response.model,
-                "tool_call_count": len(calls),
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.total_tokens,
-            },
-        )
-        if len(calls) != 1 or calls[0].name != FINISH_TESTING_TOOL.name:
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "llm_requested",
+                {"iteration": current_iteration, "message_count": len(messages)},
+            )
+            response = self._provider.chat(
+                messages,
+                tools=TEST_REPORT_TOOLS,
+                tool_choice="required",
+            )
+            calls = response.message.tool_calls
+            record_agent_event(
+                self._recorder,
+                state,
+                self.name,
+                "llm_responded",
+                {
+                    "iteration": current_iteration,
+                    "model": response.model,
+                    "tool_call_count": len(calls),
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                },
+            )
+            messages.append(response.message)
+            if len(calls) == 1 and calls[0].name == FINISH_TESTING_TOOL.name:
+                return self._finish(state, calls[0], request, result)
+
             reason = "Testing finalization permits exactly one finish_testing call"
             for call in calls:
                 record_agent_event(
@@ -310,17 +322,30 @@ class TesterAgent:
                     state,
                     self.name,
                     "tool_requested",
-                    {"iteration": iteration, "tool": call.name},
+                    {"iteration": current_iteration, "tool": call.name},
                 )
                 record_agent_event(
                     self._recorder,
                     state,
                     self.name,
                     "tool_rejected",
-                    {"iteration": iteration, "tool": call.name, "reason": reason},
+                    {
+                        "iteration": current_iteration,
+                        "tool": call.name,
+                        "reason": reason,
+                    },
                 )
-            return AgentResult(False, reason)
-        return self._finish(state, calls[0], request, result)
+                messages.append(
+                    ChatMessage(
+                        "tool",
+                        json.dumps({"ok": False, "error": reason}),
+                        tool_call_id=call.id,
+                    )
+                )
+        return AgentResult(
+            False,
+            "Tester failed both bounded finish_testing report attempts",
+        )
 
     def _request_from_call(self, call: ToolCall) -> ActionRequest:
         executable = call.arguments.get("executable")

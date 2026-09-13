@@ -189,6 +189,11 @@ The Tester may only finish after a real command completed. Before execution it i
 
 If the Tester reports success when the exit code says failure—or failure when execution actually passed—AgentForge rejects the model response. The Debugger is started only when the current Tester run returns a genuine failed report containing its command and output. Missing or stale reports stop with a clear error instead of sending the Debugger evidence it cannot trust.
 
+Some hosted models occasionally request another command even when only the
+reporting tool is offered. AgentForge does not execute that invented command. It
+returns a protocol error and gives the Tester one correction-only reporting turn,
+using the already completed test evidence. Repeating the mistake stops safely.
+
 ## 7.5 What happens when tests fail?
 
 A failed test is not automatically a failed project run. The repair orchestrator follows an explicit route:

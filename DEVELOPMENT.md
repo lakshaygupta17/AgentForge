@@ -740,3 +740,12 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Proved the contract against the correct reference implementation first: all 13 tests passed.
 - Seeded six defects across three modules. The committed challenge preserves four passing behaviors and produces nine targeted failures.
 - Kept all source synthetic and free of credentials or user repository data. The live run is separately recorded after execution so its metrics remain measured rather than predicted.
+
+### 2026-09-13 — Tester report correction on hard benchmark
+
+- Ran the six-file cloud-billing fixture through Hugging Face and an E2B Hobby microVM with explicit authorization.
+- Explorer correctly identified all three defective implementation modules and five categories of defects; Developer applied three accepted patches covering all three files.
+- The broad 13-test suite executed and returned exit code 1, but Qwen invented another `run_tests` call on the report-only turn even though only `finish_testing` was advertised. The invented command was rejected and never executed.
+- Added exactly one correction-only Tester report turn, mirroring the bounded Explorer finalization recovery. It reuses the completed execution evidence and never exposes a command tool.
+- Added tests proving an invented narrower command cannot execute, a corrected report remains tied to the original failure, and a second invalid report stops closed.
+- Final offline verification: 208 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. The failed authorized run is preserved at `trajectories/live-repair-20260913T125416Z.jsonl`; no repeat hosted run has been made.

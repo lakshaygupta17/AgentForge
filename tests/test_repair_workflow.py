@@ -236,7 +236,7 @@ class RepairWorkflowTests(TestCase):
             self.assertIn("test_execution_rejected", event_types)
             self.assertIn("testing_finalization_required", event_types)
 
-    def test_tester_cannot_replace_completed_failure_with_narrower_command(self) -> None:
+    def test_tester_rejects_narrower_command_and_recovers_report(self) -> None:
         with LocalSandbox() as sandbox:
             state = WorkflowState(Task("Run the acceptance suite"))
             state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
@@ -260,6 +260,11 @@ class RepairWorkflowTests(TestCase):
                             "arguments": ["-c", "raise SystemExit(0)"],
                         },
                     ),
+                    tool_response(
+                        "corrected-report",
+                        "finish_testing",
+                        {"passed": False, "summary": "Acceptance suite failed"},
+                    ),
                 ]
             )
             recorder = InMemoryTrajectoryRecorder()
@@ -272,14 +277,51 @@ class RepairWorkflowTests(TestCase):
             ).run(state)
 
             self.assertFalse(result.success)
-            self.assertNotIn(TEST_ARTIFACT, result.artifacts)
+            report = result.artifacts[TEST_ARTIFACT]
+            self.assertIsInstance(report, AgentTestReport)
+            self.assertFalse(report.passed)
             self.assertEqual(
                 tuple(tool.name for tool in provider.requests[-1].tools),
                 ("finish_testing",),
             )
-            self.assertIn(
-                "tool_rejected", [event.event_type for event in recorder.events]
+            event_types = [event.event_type for event in recorder.events]
+            self.assertIn("tool_rejected", event_types)
+            self.assertIn("testing_finalization_retry", event_types)
+
+    def test_tester_stops_after_second_invalid_report_response(self) -> None:
+        with LocalSandbox() as sandbox:
+            state = WorkflowState(Task("Run the acceptance suite"))
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
+                "changed", ("file.py",), 1
             )
+            improper_rerun = {
+                "executable": sys.executable,
+                "arguments": ["-c", "raise SystemExit(0)"],
+            }
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "failed-run",
+                        "run_tests",
+                        {
+                            "executable": sys.executable,
+                            "arguments": ["-c", "raise SystemExit(1)"],
+                        },
+                    ),
+                    tool_response("wrong-report-1", "run_tests", improper_rerun),
+                    tool_response("wrong-report-2", "run_tests", improper_rerun),
+                ]
+            )
+
+            result = AgentTester(
+                provider,
+                sandbox,
+                SecurityPolicy(),
+            ).run(state)
+
+            self.assertFalse(result.success)
+            self.assertNotIn(TEST_ARTIFACT, result.artifacts)
+            self.assertEqual(len(provider.requests), 3)
 
 
 class RepositoryEditorTests(TestCase):
