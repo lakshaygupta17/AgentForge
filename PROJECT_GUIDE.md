@@ -333,6 +333,25 @@ Developer list directly from accepted patch-tool receipts. The model supplies a
 human-readable summary but cannot accidentally fail the run by repeating an old
 file name or omitting a newly confirmed one.
 
+## 7.17 What does the hardest synthetic benchmark test?
+
+The cloud-billing fixture resembles the kind of code behind a small software
+subscription business. A monthly invoice combines a base subscription, API
+usage tiers, a percentage coupon, a fixed customer credit, and sales tax. A
+mistake in an early stage changes the numbers used by later stages, so fixing a
+single failing total is not enough.
+
+The challenge contains six intentional defects spread across three implementation
+files. Thirteen tests examine individual calculations and complete invoices;
+nine fail initially while four continue to pass. This mixture matters because it
+forces the agents to preserve correct behavior while repairing proration,
+graduated rates, rounding, caps, adjustment ordering, and exemptions.
+
+Before seeding the bugs, the exact same tests passed against the correct reference
+implementation. The fixture is dependency-free and entirely synthetic. Its
+purpose is to measure a real multi-file repair under controlled conditions—not to
+inflate a score using fabricated results.
+
 ## 8. How the pieces fit together
 
 ```text

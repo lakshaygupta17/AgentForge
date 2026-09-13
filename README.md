@@ -396,6 +396,23 @@ agentforge live-repair `
   --allow-sandbox-execution
 ```
 
+For the hardest synthetic live benchmark, `examples\cloud_billing_repair_fixture`
+models a SaaS invoice engine. Six defects interact across base-fee proration,
+graduated API usage, coupon rounding, service-credit caps, taxable-base ordering,
+and tax exemption. The correct reference passed all 13 acceptance tests before
+the defects were seeded; the committed challenge passes four and fails nine.
+It has no external dependencies and contains no personal repository data.
+
+```powershell
+agentforge live-repair `
+  --sandbox-backend e2b `
+  --workspace .\examples\cloud_billing_repair_fixture `
+  --output .\artifacts\cloud-billing-repaired `
+  --task "Read TASK.md and repair the cloud billing implementation without modifying tests" `
+  --allow-code-transmission `
+  --allow-sandbox-execution
+```
+
 To repeat only that minimal provider test deliberately:
 
 ```powershell

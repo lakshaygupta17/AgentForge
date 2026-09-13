@@ -732,3 +732,11 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Made the model responsible only for the human-readable development summary. A legacy model-supplied file list is compared for telemetry and reconciled to confirmed tool evidence rather than failing the workflow.
 - Added a two-attempt, two-file regression proving the second report contains only its own file, a mismatched legacy list cannot override evidence, and the cumulative review set still contains both files.
 - Final offline verification: 207 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. No hosted provider or microVM was contacted during this change.
+
+### 2026-09-13 — Cloud billing hard benchmark fixture
+
+- Added a six-file, dependency-free SaaS billing fixture with four implementation modules, an issue-style task brief, and 13 acceptance tests.
+- Covered partial-month half-up proration, three graduated API-usage bands, percentage-coupon rounding, capped service credits, adjustment ordering, taxable bases, tax exemption, and invalid inputs.
+- Proved the contract against the correct reference implementation first: all 13 tests passed.
+- Seeded six defects across three modules. The committed challenge preserves four passing behaviors and produces nine targeted failures.
+- Kept all source synthetic and free of credentials or user repository data. The live run is separately recorded after execution so its metrics remain measured rather than predicted.
