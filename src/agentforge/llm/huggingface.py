@@ -19,6 +19,7 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
         token: str,
         model: str,
         timeout_seconds: float = 60.0,
+        maximum_output_tokens: int | None = None,
         retry_policy: RetryPolicy | None = None,
         transport: HttpTransport | None = None,
         sleeper: Callable[[float], None] | None = None,
@@ -29,6 +30,7 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
                 api_key=token,
                 model=model,
                 timeout_seconds=timeout_seconds,
+                maximum_output_tokens=maximum_output_tokens,
                 retry_policy=retry_policy,
                 transport=transport,
             )
@@ -38,6 +40,7 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
                 api_key=token,
                 model=model,
                 timeout_seconds=timeout_seconds,
+                maximum_output_tokens=maximum_output_tokens,
                 retry_policy=retry_policy,
                 transport=transport,
                 sleeper=sleeper,

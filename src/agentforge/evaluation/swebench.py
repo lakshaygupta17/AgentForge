@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict, deque
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
@@ -27,7 +31,7 @@ class SweBenchCase:
 def load_swebench_subset(
     path: Path,
     *,
-    maximum_cases: int = 25,
+    maximum_cases: int = 500,
     maximum_problem_characters: int = 20_000,
 ) -> tuple[SweBenchCase, ...]:
     """Load metadata only; this never clones repositories or executes tests."""
@@ -56,6 +60,74 @@ def load_swebench_subset(
         identifiers.add(case.instance_id)
         cases.append(case)
     return tuple(cases)
+
+
+def select_balanced_swebench_cases(
+    rows: Iterable[Mapping[str, Any]], *, limit: int = 100
+) -> tuple[SweBenchCase, ...]:
+    """Round-robin repositories so a prefix is not dominated by one project."""
+
+    if limit <= 0:
+        raise ValueError("SWE-bench selection limit must be greater than zero")
+    buckets: dict[str, deque[SweBenchCase]] = defaultdict(deque)
+    for row in rows:
+        case = _parse_case(dict(row), 100_000)
+        buckets[case.repository].append(case)
+    for bucket in buckets.values():
+        ordered = sorted(bucket, key=lambda case: case.instance_id)
+        bucket.clear()
+        bucket.extend(ordered)
+    selected: list[SweBenchCase] = []
+    repositories = sorted(buckets)
+    while len(selected) < limit:
+        progressed = False
+        for repository in repositories:
+            if buckets[repository] and len(selected) < limit:
+                selected.append(buckets[repository].popleft())
+                progressed = True
+        if not progressed:
+            break
+    return tuple(selected)
+
+
+def download_verified_subset(*, limit: int = 100) -> tuple[SweBenchCase, ...]:
+    """Download metadata from the official Verified test split and balance it."""
+
+    try:
+        datasets = import_module("datasets")
+    except ImportError as error:
+        raise SweBenchSubsetError(
+            "Install AgentForge's swebench extra inside the project virtual environment"
+        ) from error
+    try:
+        rows = datasets.load_dataset(
+            "princeton-nlp/SWE-bench_Verified", split="test"
+        )
+    except Exception as error:
+        raise SweBenchSubsetError(f"Could not download SWE-bench Verified: {error}") from error
+    return select_balanced_swebench_cases(rows, limit=limit)
+
+
+def write_swebench_subset(path: Path, cases: Iterable[SweBenchCase]) -> None:
+    """Persist only task metadata; never store the benchmark's reference patch."""
+
+    output = path.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(
+            {
+                "instance_id": case.instance_id,
+                "repo": case.repository,
+                "base_commit": case.base_commit,
+                "problem_statement": case.problem_statement,
+                "FAIL_TO_PASS": list(case.fail_to_pass),
+                "PASS_TO_PASS": list(case.pass_to_pass),
+            },
+            ensure_ascii=False,
+        )
+        for case in cases
+    ]
+    output.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _parse_case(document: object, maximum_problem_characters: int) -> SweBenchCase:

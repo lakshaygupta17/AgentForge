@@ -119,9 +119,7 @@ class RepairWorkflowTests(TestCase):
             )
 
             state = orchestrator.run(Task("Fix is_even so the specification passes"))
-            repaired_source = (sandbox.workspace / "calculator.py").read_text(
-                encoding="utf-8"
-            )
+            repaired_source = (sandbox.workspace / "calculator.py").read_text(encoding="utf-8")
 
         self.assertFalse(state.failed)
         self.assertIn("== 0", repaired_source)
@@ -146,17 +144,9 @@ class RepairWorkflowTests(TestCase):
             (sandbox.workspace / "file.py").write_text("value = 1", encoding="utf-8")
             inspector = RepositoryInspector(sandbox.workspace)
             editor = RepositoryEditor(inspector)
-            editor.apply_patch(
-                {
-                    "changes": [
-                        {"path": "file.py", "old_text": "1", "new_text": "2"}
-                    ]
-                }
-            )
+            editor.apply_patch({"changes": [{"path": "file.py", "old_text": "1", "new_text": "2"}]})
             state = WorkflowState(Task("test"))
-            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
-                "changed", ("file.py",), 1
-            )
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport("changed", ("file.py",), 1)
             provider = MockLLMProvider(
                 [
                     tool_response(
@@ -172,12 +162,19 @@ class RepairWorkflowTests(TestCase):
                         "finish_testing",
                         {"passed": True, "summary": "Looks good"},
                     ),
+                    tool_response(
+                        "corrected",
+                        "finish_testing",
+                        {"passed": False, "summary": "Machine evidence failed"},
+                    ),
                 ]
             )
             agent = AgentTester(provider, sandbox, SecurityPolicy())
 
-            with self.assertRaisesRegex(RuntimeError, "does not match"):
-                agent.run(state)
+            result = agent.run(state)
+
+            self.assertFalse(result.success)
+            self.assertFalse(result.artifacts[TEST_ARTIFACT].passed)
 
     def test_tester_reports_a_valid_execution_after_rejected_command_attempts(self) -> None:
         with LocalSandbox() as sandbox:
@@ -239,9 +236,7 @@ class RepairWorkflowTests(TestCase):
     def test_tester_rejects_narrower_command_and_recovers_report(self) -> None:
         with LocalSandbox() as sandbox:
             state = WorkflowState(Task("Run the acceptance suite"))
-            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
-                "changed", ("file.py",), 1
-            )
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport("changed", ("file.py",), 1)
             provider = MockLLMProvider(
                 [
                     tool_response(
@@ -291,9 +286,7 @@ class RepairWorkflowTests(TestCase):
     def test_tester_stops_after_second_invalid_report_response(self) -> None:
         with LocalSandbox() as sandbox:
             state = WorkflowState(Task("Run the acceptance suite"))
-            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport(
-                "changed", ("file.py",), 1
-            )
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport("changed", ("file.py",), 1)
             improper_rerun = {
                 "executable": sys.executable,
                 "arguments": ["-c", "raise SystemExit(0)"],
@@ -323,6 +316,47 @@ class RepairWorkflowTests(TestCase):
             self.assertNotIn(TEST_ARTIFACT, result.artifacts)
             self.assertEqual(len(provider.requests), 3)
 
+    def test_tester_corrects_a_status_that_contradicts_machine_evidence(self) -> None:
+        with LocalSandbox() as sandbox:
+            state = WorkflowState(Task("Run the acceptance suite"))
+            state.artifacts[DEVELOPMENT_ARTIFACT] = DevelopmentReport("changed", ("file.py",), 1)
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "run",
+                        "run_tests",
+                        {
+                            "executable": sys.executable,
+                            "arguments": ["-c", "raise SystemExit(0)"],
+                        },
+                    ),
+                    tool_response(
+                        "contradiction",
+                        "finish_testing",
+                        {"passed": False, "summary": "Incorrectly reported failure"},
+                    ),
+                    tool_response(
+                        "correction",
+                        "finish_testing",
+                        {"passed": True, "summary": "Machine evidence passed"},
+                    ),
+                ]
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = AgentTester(
+                provider,
+                sandbox,
+                SecurityPolicy(),
+                recorder=recorder,
+            ).run(state)
+
+            self.assertTrue(result.success)
+            self.assertTrue(result.artifacts[TEST_ARTIFACT].passed)
+            event_types = [event.event_type for event in recorder.events]
+            self.assertIn("tool_rejected", event_types)
+            self.assertIn("testing_finalization_retry", event_types)
+
 
 class RepositoryEditorTests(TestCase):
     def test_exact_patch_accepts_lf_text_and_preserves_crlf_file(self) -> None:
@@ -340,14 +374,10 @@ class RepositoryEditorTests(TestCase):
                         {
                             "path": "checkout.py",
                             "old_text": (
-                                "shipping = (\n"
-                                "    0 if subtotal >= threshold else 500\n"
-                                ")"
+                                "shipping = (\n    0 if subtotal >= threshold else 500\n)"
                             ),
                             "new_text": (
-                                "shipping = (\n"
-                                "    0 if discounted >= threshold else 500\n"
-                                ")"
+                                "shipping = (\n    0 if discounted >= threshold else 500\n)"
                             ),
                         }
                     ]
@@ -406,9 +436,7 @@ class RepositoryEditorTests(TestCase):
             source = sandbox.workspace / "source.py"
             source.write_text("value = 1\n", encoding="utf-8")
             policy = SecurityPolicy(writable_paths=("tests/*",))
-            editor = RepositoryEditor(
-                RepositoryInspector(sandbox.workspace, policy=policy)
-            )
+            editor = RepositoryEditor(RepositoryInspector(sandbox.workspace, policy=policy))
 
             with self.assertRaisesRegex(RepositoryEditError, "allowlist"):
                 editor.apply_patch(

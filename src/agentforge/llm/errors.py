@@ -24,3 +24,6 @@ class ProviderConnectionError(LLMProviderError):
 class ProviderResponseError(LLMProviderError):
     """The provider returned an invalid or unsupported response."""
 
+
+class ProviderBudgetExceededError(LLMProviderError):
+    """A local inference budget prevented another billable request."""

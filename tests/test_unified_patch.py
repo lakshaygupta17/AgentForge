@@ -76,9 +76,7 @@ class UnifiedPatchTests(TestCase):
             editor = RepositoryEditor(RepositoryInspector(root))
 
             with self.assertRaisesRegex(RepositoryEditError, "creation and deletion"):
-                editor.apply_unified_patch(
-                    "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
-                )
+                editor.apply_unified_patch("--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n")
             with self.assertRaisesRegex(RepositoryEditError, "renames"):
                 editor.apply_unified_patch(
                     "--- a/old.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-old\n+new\n"
@@ -227,6 +225,63 @@ class UnifiedPatchTests(TestCase):
             self.assertEqual(len(provider.requests), 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "enabled = False\n")
 
+    def test_developer_finalizes_after_rejected_followup_to_a_valid_patch(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "app.py"
+            target.write_text("enabled = False\n", encoding="utf-8")
+            editor = RepositoryEditor(RepositoryInspector(root))
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "valid-patch",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "app.py",
+                                    "old_text": "enabled = False",
+                                    "new_text": "enabled = True",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "invalid-followup",
+                        "apply_patch",
+                        {
+                            "changes": [
+                                {
+                                    "path": "",
+                                    "old_text": "old",
+                                    "new_text": "new",
+                                }
+                            ]
+                        },
+                    ),
+                    tool_response(
+                        "finish",
+                        "finish_development",
+                        {"summary": "Enabled the feature"},
+                    ),
+                ]
+            )
+            state = WorkflowState(Task("Enable the feature"))
+            state.artifacts[PLAN_ARTIFACT] = Plan(("Edit app.py",), "Direct change")
+            state.artifacts[EXPLORATION_ARTIFACT] = ExplorationReport(
+                "Found flag", ("app.py",), ("Feature is disabled",)
+            )
+
+            result = DeveloperAgent(provider, editor).run(state)
+
+            self.assertTrue(result.success)
+            self.assertEqual(len(provider.requests), 3)
+            self.assertEqual(
+                tuple(tool.name for tool in provider.requests[-1].tools),
+                ("finish_development",),
+            )
+            self.assertLess(len(provider.requests[-1].messages), 4)
+
     def test_developer_report_is_scoped_to_the_current_repair_attempt(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -295,9 +350,7 @@ class UnifiedPatchTests(TestCase):
             recorder = InMemoryTrajectoryRecorder()
 
             first = DeveloperAgent(first_provider, editor).run(state)
-            second = DeveloperAgent(
-                second_provider, editor, recorder=recorder
-            ).run(state)
+            second = DeveloperAgent(second_provider, editor, recorder=recorder).run(state)
 
             self.assertTrue(first.success)
             self.assertTrue(second.success)

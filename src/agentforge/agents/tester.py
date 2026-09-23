@@ -78,9 +78,7 @@ class TesterAgent:
         self._recorder = recorder
         self._maximum_iterations = maximum_iterations
         self._maximum_context_characters = maximum_context_characters
-        self._maximum_tool_observation_characters = (
-            maximum_tool_observation_characters
-        )
+        self._maximum_tool_observation_characters = maximum_tool_observation_characters
 
     def run(self, state: WorkflowState) -> AgentResult:
         development = state.artifacts.get(DEVELOPMENT_ARTIFACT)
@@ -271,9 +269,9 @@ class TesterAgent:
                 event_type = "testing_finalization_required"
             else:
                 instruction = (
-                    "Your previous report response did not call exactly one finish_testing "
-                    "tool. This is the single correction retry. Report the already completed "
-                    "test result now; no command tool is available."
+                    "Your previous finish_testing report was invalid. This is the single "
+                    "correction retry. Report the already completed test result exactly as "
+                    "shown by the tool evidence; no command tool is available."
                 )
                 event_type = "testing_finalization_retry"
             messages.append(ChatMessage("system", instruction))
@@ -313,7 +311,31 @@ class TesterAgent:
             )
             messages.append(response.message)
             if len(calls) == 1 and calls[0].name == FINISH_TESTING_TOOL.name:
-                return self._finish(state, calls[0], request, result)
+                try:
+                    return self._finish(state, calls[0], request, result)
+                except AgentProtocolError as error:
+                    reason = str(error)
+                    record_agent_event(
+                        self._recorder,
+                        state,
+                        self.name,
+                        "tool_rejected",
+                        {
+                            "iteration": current_iteration,
+                            "tool": calls[0].name,
+                            "reason": reason,
+                        },
+                    )
+                    messages.append(
+                        ChatMessage(
+                            "tool",
+                            json.dumps({"ok": False, "error": reason}),
+                            tool_call_id=calls[0].id,
+                        )
+                    )
+                    if finalization_attempt == 0:
+                        continue
+                    return AgentResult(False, reason)
 
             reason = "Testing finalization permits exactly one finish_testing call"
             for call in calls:
@@ -389,9 +411,7 @@ class TesterAgent:
         if not isinstance(summary, str) or not summary.strip():
             raise AgentProtocolError("Test summary must be non-empty text")
         if passed != result.succeeded:
-            raise AgentProtocolError(
-                "Reported test status does not match the last command result"
-            )
+            raise AgentProtocolError("Reported test status does not match the last command result")
 
         report = TestReport(
             passed=passed,

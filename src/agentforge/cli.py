@@ -38,6 +38,15 @@ from agentforge.evaluation.repair import (
     summarize_repair_benchmark_suites,
     summarize_repair_benchmarks,
 )
+from agentforge.evaluation.swebench import (
+    download_verified_subset,
+    load_swebench_subset,
+)
+from agentforge.evaluation.swebench_runner import (
+    grade_prediction_batches,
+    run_generation_batches,
+)
+from agentforge.llm.budget import ModelPricing
 from agentforge.llm.huggingface import HuggingFaceProvider
 from agentforge.orchestration.repair import RepairOrchestrator
 from agentforge.orchestration.runner import MultiAgentOrchestrator
@@ -198,9 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sandbox-health",
         help="check sandbox prerequisites without creating a cloud microVM",
     )
-    health_parser.add_argument(
-        "--backend", choices=("all", "local", "sbx", "e2b"), default="all"
-    )
+    health_parser.add_argument("--backend", choices=("all", "local", "sbx", "e2b"), default="all")
     startup_parser = subparsers.add_parser(
         "sandbox-startup",
         help="measure bounded local cold starts without creating cloud resources",
@@ -229,12 +236,197 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts") / "sbx-orphans.json",
     )
     reaper_parser.add_argument("--allow-cleanup", action="store_true")
+    swebench_parser = subparsers.add_parser(
+        "swebench-run",
+        help="generate SWE-bench predictions in sequential waves of at most 20 E2B microVMs",
+    )
+    swebench_parser.add_argument(
+        "--output", type=Path, default=Path("artifacts") / "swebench-agentforge-100"
+    )
+    swebench_parser.add_argument("--subset", type=Path)
+    swebench_parser.add_argument(
+        "--instance-id",
+        action="append",
+        help="run only a named case from the selected subset (repeatable)",
+    )
+    swebench_parser.add_argument(
+        "--instance-id-file",
+        type=Path,
+        help="newline-delimited case IDs; blank lines and # comments are ignored",
+    )
+    swebench_parser.add_argument("--limit", type=int, default=100)
+    swebench_parser.add_argument("--batch-size", type=int, default=20)
+    swebench_parser.add_argument("--template-workers", type=int, default=4)
+    swebench_parser.add_argument("--max-attempts", type=int, default=3)
+    swebench_parser.add_argument(
+        "--economy-model",
+        default="Qwen/Qwen3.6-35B-A3B:cheapest",
+        help="preferred Tester model; transient failures fall back to repair model",
+    )
+    swebench_parser.add_argument(
+        "--repair-model",
+        default="deepseek-ai/DeepSeek-V4.1-Flash:cheapest",
+        help="model used by Planner, Explorer, Developer, Debugger, Reviewer, and fallback",
+    )
+    swebench_parser.add_argument("--economy-input-price", type=float, default=0.10)
+    swebench_parser.add_argument("--economy-output-price", type=float, default=0.95)
+    swebench_parser.add_argument("--repair-input-price", type=float, default=0.20)
+    swebench_parser.add_argument("--repair-output-price", type=float, default=0.60)
+    swebench_parser.add_argument(
+        "--max-model-requests", type=int, default=80, help="overall run request ceiling"
+    )
+    swebench_parser.add_argument(
+        "--max-model-tokens", type=int, default=1_500_000, help="overall run token ceiling"
+    )
+    swebench_parser.add_argument(
+        "--max-model-cost", type=float, default=0.30, help="overall estimated-cost ceiling"
+    )
+    swebench_parser.add_argument("--max-case-model-requests", type=int, default=30)
+    swebench_parser.add_argument("--max-case-model-tokens", type=int, default=400_000)
+    swebench_parser.add_argument("--max-case-model-cost", type=float, default=0.08)
+    swebench_parser.add_argument("--max-output-tokens", type=int, default=4_096)
+    swebench_parser.add_argument("--economy-timeout", type=float, default=30.0)
+    swebench_parser.add_argument("--repair-timeout", type=float, default=180.0)
+    swebench_parser.add_argument("--allow-code-transmission", action="store_true")
+    swebench_parser.add_argument("--allow-sandbox-execution", action="store_true")
+    grade_parser = subparsers.add_parser(
+        "swebench-grade",
+        help="canonically grade generated predictions in fresh waves of E2B microVMs",
+    )
+    grade_parser.add_argument("--run", type=Path, required=True)
+    grade_parser.add_argument("--batch-size", type=int, default=20)
+    grade_parser.add_argument("--allow-code-transmission", action="store_true")
+    grade_parser.add_argument("--allow-sandbox-execution", action="store_true")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     load_project_environment()
     arguments = build_parser().parse_args(argv)
+    if arguments.command in {"swebench-run", "swebench-grade"}:
+        approval = ApprovalCheckpoint(
+            code_transmission=arguments.allow_code_transmission,
+            sandbox_execution=arguments.allow_sandbox_execution,
+        )
+        try:
+            approval.require(ApprovalCapability.CODE_TRANSMISSION)
+            approval.require(ApprovalCapability.SANDBOX_EXECUTION)
+        except ApprovalRequiredError as error:
+            raise SystemExit(
+                f"{arguments.command} requires explicit {error.capability.value} approval"
+            ) from None
+        if not 1 <= arguments.batch_size <= 20:
+            raise SystemExit("--batch-size must be between 1 and 20")
+
+        if arguments.command == "swebench-run":
+            if arguments.limit <= 0 or arguments.limit > 100:
+                raise SystemExit("--limit must be between 1 and 100")
+            if arguments.max_attempts <= 0:
+                raise SystemExit("--max-attempts must be greater than zero")
+            if (
+                min(
+                    arguments.max_model_requests,
+                    arguments.max_model_tokens,
+                    arguments.max_model_cost,
+                    arguments.max_output_tokens,
+                    arguments.economy_timeout,
+                    arguments.repair_timeout,
+                    arguments.max_case_model_requests,
+                    arguments.max_case_model_tokens,
+                    arguments.max_case_model_cost,
+                )
+                <= 0
+            ):
+                raise SystemExit("model budget limits must be greater than zero")
+            prices = (
+                arguments.economy_input_price,
+                arguments.economy_output_price,
+                arguments.repair_input_price,
+                arguments.repair_output_price,
+            )
+            if min(prices) < 0:
+                raise SystemExit("model prices cannot be negative")
+            if not 1 <= arguments.template_workers <= 20:
+                raise SystemExit("--template-workers must be between 1 and 20")
+            cases = (
+                load_swebench_subset(
+                    arguments.subset,
+                    maximum_cases=100,
+                    maximum_problem_characters=100_000,
+                )
+                if arguments.subset is not None
+                else download_verified_subset(limit=arguments.limit)
+            )
+            requested = set(arguments.instance_id or ())
+            if arguments.instance_id_file is not None:
+                try:
+                    requested.update(
+                        line.strip()
+                        for line in arguments.instance_id_file.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if line.strip() and not line.lstrip().startswith("#")
+                    )
+                except (OSError, UnicodeError) as error:
+                    raise SystemExit(f"Could not read --instance-id-file: {error}") from None
+            if requested:
+                available = {case.instance_id for case in cases}
+                missing = sorted(requested - available)
+                if missing:
+                    raise SystemExit(
+                        "SWE-bench instance not found in subset: " + ", ".join(missing)
+                    )
+                cases = tuple(case for case in cases if case.instance_id in requested)
+            cases = cases[: arguments.limit]
+            batch_summary = run_generation_batches(
+                cases,
+                output_directory=arguments.output,
+                batch_size=arguments.batch_size,
+                template_workers=arguments.template_workers,
+                maximum_repair_attempts=arguments.max_attempts,
+                economy_model=arguments.economy_model,
+                repair_model=arguments.repair_model,
+                economy_pricing=ModelPricing(
+                    arguments.economy_input_price,
+                    arguments.economy_output_price,
+                ),
+                repair_pricing=ModelPricing(
+                    arguments.repair_input_price,
+                    arguments.repair_output_price,
+                ),
+                maximum_model_requests=arguments.max_model_requests,
+                maximum_model_tokens=arguments.max_model_tokens,
+                maximum_model_cost_usd=arguments.max_model_cost,
+                maximum_output_tokens=arguments.max_output_tokens,
+                economy_timeout_seconds=arguments.economy_timeout,
+                repair_timeout_seconds=arguments.repair_timeout,
+                maximum_case_model_requests=arguments.max_case_model_requests,
+                maximum_case_model_tokens=arguments.max_case_model_tokens,
+                maximum_case_model_cost_usd=arguments.max_case_model_cost,
+            )
+            document = asdict(batch_summary)
+            document["locally_accepted_cases"] = document.pop("resolved_cases")
+            document["locally_unaccepted_cases"] = document.pop("unresolved_cases")
+            document["canonical_score"] = "pending swebench-grade"
+            document["output"] = str(arguments.output.resolve())
+            print(json.dumps(document, indent=2))
+            return 0 if batch_summary.error_cases == 0 else 1
+
+        run_directory = arguments.run.resolve()
+        cases = load_swebench_subset(
+            run_directory / "selected-cases.jsonl",
+            maximum_cases=100,
+            maximum_problem_characters=100_000,
+        )
+        report = grade_prediction_batches(
+            cases,
+            predictions_path=run_directory / "predictions.jsonl",
+            output_directory=run_directory / "evaluation",
+            batch_size=arguments.batch_size,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if not report.get("errored") else 1
+
     if arguments.command == "reap-sbx-orphans":
         if not arguments.allow_cleanup:
             raise SystemExit(
@@ -315,9 +507,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if supplied_prices[0] is None or supplied_prices[1] is None
                 else TokenPricing(*supplied_prices)
             )
-            metrics = summarize_trajectory(
-                load_trajectory(arguments.trajectory), pricing=pricing
-            )
+            metrics = summarize_trajectory(load_trajectory(arguments.trajectory), pricing=pricing)
             if arguments.database is not None:
                 SqliteMetricsStore(arguments.database).save(metrics)
         except (MetricsError, ValueError) as error:
@@ -334,9 +524,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             import uvicorn
         except ImportError:
-            raise SystemExit(
-                "The local service requires: pip install -e .[service]"
-            ) from None
+            raise SystemExit("The local service requires: pip install -e .[service]") from None
         from agentforge.service.app import create_app
 
         uvicorn.run(create_app(), host="127.0.0.1", port=arguments.port)
@@ -372,9 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if arguments.command == "benchmark-report":
         try:
-            summary = summarize_repair_benchmarks(
-                load_repair_benchmarks(arguments.history)
-            )
+            summary = summarize_repair_benchmarks(load_repair_benchmarks(arguments.history))
         except BenchmarkHistoryError as error:
             raise SystemExit(f"Invalid benchmark history: {error}") from None
         print(json.dumps(asdict(summary), indent=2))
@@ -392,15 +578,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("- Hugging Face token: " + hugging_face_status)
         print(
             "- Hugging Face model: "
-            + (
-                "CONFIGURED"
-                if status.hugging_face_model
-                else "MISSING (AGENTFORGE_MODEL)"
-            )
+            + ("CONFIGURED" if status.hugging_face_model else "MISSING (AGENTFORGE_MODEL)")
         )
         print(
-            "- E2B Hobby key: "
-            + ("CONFIGURED" if status.e2b_api_key else "MISSING (E2B_API_KEY)")
+            "- E2B Hobby key: " + ("CONFIGURED" if status.e2b_api_key else "MISSING (E2B_API_KEY)")
         )
         print("No secret values were displayed. No network request was made.")
         return 0 if status.ready else 2
@@ -428,9 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(
                 "Task text appears to contain a credential; remove it before transmission"
             )
-        approval = ApprovalCheckpoint(
-            code_transmission=arguments.allow_code_transmission
-        )
+        approval = ApprovalCheckpoint(code_transmission=arguments.allow_code_transmission)
         try:
             approval.require(ApprovalCapability.CODE_TRANSMISSION)
         except ApprovalRequiredError:
@@ -528,11 +707,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected_sandbox = (
             E2BSandbox(template=arguments.e2b_template)
             if arguments.sandbox_backend == "e2b"
-            else SbxSandbox(
-                orphan_registry=OrphanRegistry(
-                    Path("artifacts") / "sbx-orphans.json"
-                )
-            )
+            else SbxSandbox(orphan_registry=OrphanRegistry(Path("artifacts") / "sbx-orphans.json"))
         )
         with selected_sandbox as sandbox:
             if isinstance(sandbox, SbxSandbox):
@@ -544,9 +719,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             provider = HuggingFaceProvider.from_environment()
             repair_workflow = RepairOrchestrator(
                 planner=PlannerAgent(provider, recorder=recorder),
-                explorer=RepositoryExplorerAgent(
-                    provider, inspector, recorder=recorder
-                ),
+                explorer=RepositoryExplorerAgent(provider, inspector, recorder=recorder),
                 developer=DeveloperAgent(provider, editor, recorder=recorder),
                 tester=TesterAgent(
                     provider,

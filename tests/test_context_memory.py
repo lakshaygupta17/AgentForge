@@ -39,10 +39,9 @@ class RunContextMemoryTests(TestCase):
 
 class ContextBudgetTests(TestCase):
     def test_json_payload_never_exceeds_its_budget(self) -> None:
-        result = budget_json_payload(
-            {"ok": True, "result": "repository text " * 500}, 300
-        )
+        result = budget_json_payload({"ok": True, "result": "repository text " * 500}, 300)
 
         self.assertTrue(result.truncated)
         self.assertLessEqual(len(result.text), 300)
+        self.assertGreater(len(result.text), 250)
         self.assertGreater(result.original_characters, len(result.text))

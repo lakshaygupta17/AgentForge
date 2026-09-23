@@ -150,6 +150,25 @@ class PolicyFileCliTests(TestCase):
                 )
 
 
+class SweBenchCliTests(TestCase):
+    def test_accepts_manifest_and_separate_case_budget(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "swebench-run",
+                "--instance-id-file",
+                "benchmarks/cases.txt",
+                "--max-model-cost",
+                "1.20",
+                "--max-case-model-cost",
+                "0.08",
+            ]
+        )
+
+        self.assertEqual(arguments.instance_id_file, Path("benchmarks/cases.txt"))
+        self.assertEqual(arguments.max_model_cost, 1.20)
+        self.assertEqual(arguments.max_case_model_cost, 0.08)
+
+
 class LiveRepairCliTests(TestCase):
     def test_accepts_e2b_as_live_repair_backend(self) -> None:
         arguments = build_parser().parse_args(

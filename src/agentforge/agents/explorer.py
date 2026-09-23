@@ -114,7 +114,7 @@ class RepositoryExplorerAgent:
         inspector: RepositoryInspector,
         *,
         recorder: TrajectoryRecorder | None = None,
-        maximum_iterations: int = 8,
+        maximum_iterations: int = 12,
         maximum_tool_observation_characters: int = 20_000,
         embedding_index: RepositoryEmbeddingIndex | None = None,
     ) -> None:
@@ -153,19 +153,26 @@ class RepositoryExplorerAgent:
             ),
             ChatMessage(
                 "user",
-                "Task: "
-                + state.task.description
-                + "\nPlan: "
-                + json.dumps(list(plan.steps)),
+                "Task: " + state.task.description + "\nPlan: " + json.dumps(list(plan.steps)),
             ),
         ]
+        observations: list[str] = []
+        seen_tool_requests: set[str] = set()
+        verified_paths: set[str] = set()
+        rejected_report_paths: set[str] = set()
+        valid_report_candidates: set[str] = set()
+        duplicate_requests = 0
+        finalization_attempts = 0
 
         finalization_retry_iteration = self._maximum_iterations + 1
         for iteration in range(1, finalization_retry_iteration + 1):
             tools: tuple[ToolDefinition, ...] = self._tools
-            finalization_required = iteration >= self._maximum_iterations
+            finalization_required = iteration >= self._maximum_iterations or duplicate_requests >= 2
             if finalization_required:
-                if iteration == self._maximum_iterations:
+                if finalization_attempts >= 2:
+                    break
+                finalization_attempts += 1
+                if finalization_attempts == 1:
                     instruction = (
                         "This is the final exploration turn. Stop inspecting and call "
                         "finish_exploration now using only evidence already observed."
@@ -192,15 +199,67 @@ class RepositoryExplorerAgent:
                     event_type,
                     {"iteration": iteration},
                 )
+            request_messages = messages
+            if finalization_required:
+                correction = (
+                    {
+                        "allowed_relevant_files": sorted(verified_paths | valid_report_candidates),
+                        "forbidden_nonexistent_files": sorted(rejected_report_paths),
+                        "instruction": (
+                            "Use only allowed_relevant_files in relevant_files. "
+                            "Do not repeat any forbidden_nonexistent_files."
+                        ),
+                    }
+                    if finalization_attempts > 1 and rejected_report_paths
+                    else None
+                )
+                evidence = budget_json_payload(
+                    (
+                        {
+                            "observations": observations,
+                            "report_correction": correction,
+                        }
+                        if correction is not None
+                        else {
+                            "task": state.task.description,
+                            "plan": list(plan.steps),
+                            "observations": observations,
+                        }
+                    ),
+                    self._maximum_tool_observation_characters,
+                )
+                request_messages = [
+                    ChatMessage(
+                        "system",
+                        "You are the Repository Explorer in report-only mode. Using only "
+                        "the supplied repository observations, call finish_exploration "
+                        "exactly once. No inspection tool is available. Do not request "
+                        "more evidence and never invent a path.",
+                    ),
+                    ChatMessage("user", evidence.text),
+                    ChatMessage("system", instruction),
+                ]
+                if evidence.truncated:
+                    record_agent_event(
+                        self._recorder,
+                        state,
+                        self.name,
+                        "exploration_finalization_context_truncated",
+                        {
+                            "iteration": iteration,
+                            "original_characters": evidence.original_characters,
+                            "included_characters": len(evidence.text),
+                        },
+                    )
             record_agent_event(
                 self._recorder,
                 state,
                 self.name,
                 "llm_requested",
-                {"iteration": iteration, "message_count": len(messages)},
+                {"iteration": iteration, "message_count": len(request_messages)},
             )
             response = self._provider.chat(
-                messages,
+                request_messages,
                 tools=tools,
                 tool_choice="required",
             )
@@ -221,7 +280,8 @@ class RepositoryExplorerAgent:
             )
             if not calls and not finalization_required:
                 raise AgentProtocolError("Repository Explorer must call a tool")
-            messages.append(response.message)
+            if not finalization_required:
+                messages.append(response.message)
 
             finish_calls = [call for call in calls if call.name == FINISH_EXPLORATION_TOOL.name]
             if finish_calls:
@@ -231,13 +291,44 @@ class RepositoryExplorerAgent:
                             "finish_exploration cannot be combined with another tool call"
                         )
                 else:
-                    report = self._build_report(finish_calls[0])
+                    try:
+                        report = self._build_report(finish_calls[0])
+                    except AgentProtocolError as error:
+                        reason = str(error)
+                        valid_paths, invalid_paths = self._partition_report_paths(finish_calls[0])
+                        valid_report_candidates.update(valid_paths)
+                        rejected_report_paths.update(invalid_paths)
+                        record_agent_event(
+                            self._recorder,
+                            state,
+                            self.name,
+                            "tool_rejected",
+                            {
+                                "iteration": iteration,
+                                "tool": finish_calls[0].name,
+                                "reason": reason,
+                            },
+                        )
+                        observations.append(
+                            json.dumps(
+                                {"invalid_exploration_report": reason},
+                                ensure_ascii=False,
+                            )
+                        )
+                        if not finalization_required:
+                            messages.append(
+                                ChatMessage(
+                                    "tool",
+                                    json.dumps({"ok": False, "error": reason}),
+                                    tool_call_id=finish_calls[0].id,
+                                )
+                            )
+                            duplicate_requests = 2
+                        continue
                     state.memory.remember(
                         "exploration",
                         self.name,
-                        report.summary
-                        + "\n"
-                        + "\n".join(report.findings),
+                        report.summary + "\n" + "\n".join(report.findings),
                         priority=90,
                     )
                     record_agent_event(
@@ -265,11 +356,52 @@ class RepositoryExplorerAgent:
 
             if finalization_required:
                 for call in calls:
-                    messages.append(self._reject_finalization_tool(state, iteration, call))
+                    self._reject_finalization_tool(state, iteration, call)
                 continue
 
             for call in calls:
-                messages.append(self._execute_tool(state, iteration, call))
+                request_key = json.dumps(
+                    {"tool": call.name, "arguments": call.arguments},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if request_key in seen_tool_requests:
+                    duplicate_requests += 1
+                    reason = "Duplicate repository tool request; use existing evidence"
+                    record_agent_event(
+                        self._recorder,
+                        state,
+                        self.name,
+                        "tool_rejected",
+                        {"iteration": iteration, "tool": call.name, "reason": reason},
+                    )
+                    tool_message = ChatMessage(
+                        "tool",
+                        json.dumps({"ok": False, "error": reason}),
+                        tool_call_id=call.id,
+                    )
+                else:
+                    seen_tool_requests.add(request_key)
+                    tool_message = self._execute_tool(state, iteration, call)
+                    if call.name == READ_FILE_TOOL.name:
+                        try:
+                            outcome = json.loads(tool_message.content or "{}")
+                        except json.JSONDecodeError:
+                            outcome = {}
+                        path = call.arguments.get("path")
+                        if outcome.get("ok") is True and isinstance(path, str):
+                            verified_paths.add(path)
+                messages.append(tool_message)
+                observations.append(
+                    json.dumps(
+                        {
+                            "tool": call.name,
+                            "arguments": call.arguments,
+                            "result": tool_message.content,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
 
         record_agent_event(
             self._recorder,
@@ -283,9 +415,7 @@ class RepositoryExplorerAgent:
         )
         return AgentResult(
             success=False,
-            summary=(
-                "Repository Explorer reached its iteration limit without submitting a report"
-            ),
+            summary=("Repository Explorer reached its iteration limit without submitting a report"),
         )
 
     def _reject_finalization_tool(
@@ -312,9 +442,7 @@ class RepositoryExplorerAgent:
             tool_call_id=call.id,
         )
 
-    def _execute_tool(
-        self, state: WorkflowState, iteration: int, call: ToolCall
-    ) -> ChatMessage:
+    def _execute_tool(self, state: WorkflowState, iteration: int, call: ToolCall) -> ChatMessage:
         record_agent_event(
             self._recorder,
             state,
@@ -375,9 +503,7 @@ class RepositoryExplorerAgent:
                 "tool_rejected",
                 {"iteration": iteration, "tool": call.name, "reason": str(error)},
             )
-        budgeted = budget_json_payload(
-            payload, self._maximum_tool_observation_characters
-        )
+        budgeted = budget_json_payload(payload, self._maximum_tool_observation_characters)
         if budgeted.truncated:
             record_agent_event(
                 self._recorder,
@@ -421,3 +547,19 @@ class RepositoryExplorerAgent:
             relevant_files=files,
             findings=tuple(finding.strip() for finding in raw_findings),
         )
+
+    def _partition_report_paths(self, call: ToolCall) -> tuple[set[str], set[str]]:
+        raw_files = call.arguments.get("relevant_files")
+        if not isinstance(raw_files, list):
+            return set(), set()
+        valid: set[str] = set()
+        invalid: set[str] = set()
+        for raw_path in raw_files:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            path = raw_path.strip()
+            try:
+                valid.add(self._inspector.validate_file_reference(path))
+            except RepositoryToolError:
+                invalid.add(path)
+        return valid, invalid

@@ -338,7 +338,7 @@ Developer list directly from accepted patch-tool receipts. The model supplies a
 human-readable summary but cannot accidentally fail the run by repeating an old
 file name or omitting a newly confirmed one.
 
-## 7.17 What does the hardest synthetic benchmark test?
+## 7.17 What does the cloud-billing benchmark test?
 
 The cloud-billing fixture resembles the kind of code behind a small software
 subscription business. A monthly invoice combines a base subscription, API
@@ -357,7 +357,145 @@ implementation. The fixture is dependency-free and entirely synthetic. Its
 purpose is to measure a real multi-file repair under controlled conditions—not to
 inflate a score using fabricated results.
 
+## 7.18 What does the fulfillment stress test teach us?
+
+The fulfillment fixture is deliberately larger and more interconnected. An order
+passes through percentage discounts, cent-by-cent proportional allocation,
+earliest-expiry inventory selection, parcel pricing, tax, and store credit. A
+seemingly harmless rounding or ordering mistake can therefore break several later
+totals. The broken starting point passes 5 of 23 tests; an independently checked
+integer-only reference passes all 23.
+
+This benchmark also demonstrates why passing tests and satisfying a specification
+are related but not identical. One generated repair initially passed all 22 tests
+then present, but used floating-point shipping math even though the task prohibited
+it. Independent inspection caught the problem, and a large-number precision test
+was added. On the stricter contract AgentForge reached 20 of 23 tests within five
+repair attempts, then stopped without exporting incomplete code. That is a useful
+partial result: it exposes the current reasoning limit while proving the safety
+boundary behaved correctly.
+
+## 7.19 How does the 100-case real-world benchmark work?
+
+SWE-bench Verified is a collection of real GitHub issues paired with repository
+snapshots and private grading tests. AgentForge selects cases round-robin across
+projects, which is more representative than taking an alphabetical prefix that
+may contain many issues from one repository.
+
+For each issue, E2B prepares a Linux template from the official SWE-bench image.
+AgentForge's six specialists then work inside `/testbed`. They receive the issue
+and ordinary repository contents, but never the answer patch or held-out tests.
+The resulting Git diff becomes a standard SWE-bench prediction. A second fresh
+microVM applies that diff, installs the hidden test patch, runs the canonical
+test script, and records whether the issue was truly resolved.
+
+The Hobby plan allows 20 concurrent sandboxes, so the controller treats 20 as a
+hard ceiling. One hundred cases therefore become five waves: `20 -> 20 -> 20 ->
+20 -> 20`. Only the cases within the current wave can overlap. Results are
+written after every case, making the run resumable after a network failure or
+computer restart.
+
+## 7.20 Why use two models and a shared budget?
+
+Different agents do different kinds of work. Planning, file discovery, and test
+selection create many repetitive requests, while editing and debugging require
+stronger code reasoning. AgentForge can therefore route the high-volume roles
+to an economy model and the high-consequence roles to a repair model. The first
+experiment used Qwen3.6 for Planner, Explorer, and Tester, and DeepSeek
+V4.1 Flash for Developer, Debugger, and Reviewer. After Qwen repeatedly reported
+files that were not present, Explorer was moved to DeepSeek. Qwen now handles
+only Tester when it is healthy. DeepSeek handles Planner, Explorer, Developer,
+Debugger, and Reviewer, and acts as Tester's fallback.
+
+Both routes share one local inference meter. Before a request is sent, the meter
+reserves a conservative allowance for its input and maximum output. It blocks
+new requests when the configured request, token, or estimated-dollar ceiling
+would be crossed. A response is then settled using the provider's reported token
+counts. The HTTP request also contains an output-token limit. This prevents one
+agent from treating another agent's unused allowance as an independent budget.
+
+The first real smoke tests showed why model routing must be measured inside the
+actual scaffold. Both providers successfully returned structured tool calls and
+DeepSeek produced a patch that passed the visible test command, but Qwen twice
+reported nonexistent issue-mentioned test paths as repository files. Duplicate
+read rejection and better evidence compaction reduced one comparable exploration
+from 264,330 tokens to 47,319 tokens. The case still was not accepted, so this is
+an integration and efficiency result—not a repair success claim.
+
+Two follow-up runs with Explorer assigned to DeepSeek stopped earlier: the Qwen
+Planner request timed out before returning a response. This means the new route
+is locally verified but has not yet been exercised end to end. It also shows why
+AgentForge records each agent boundary—the failure can be attributed to Qwen's
+Planner call instead of being mistaken for a DeepSeek Explorer failure.
+
+A direct specialist test then removed Qwen and E2B from the path and asked the
+DeepSeek Explorer to inspect the synthetic checkout fixture. It completed in
+four requests and reported all six relevant inspected files. Its findings
+correctly located the discount-rounding, tax-exemption, and free-shipping bugs.
+This validates DeepSeek in the Explorer role, but it is not an end-to-end repair.
+
+The resilient route checks both providers before paying for a microVM. DeepSeek
+must be ready because it owns the reasoning path. If Qwen's check times out or
+is rate-limited, the workflow still starts with Tester's Qwen circuit already
+open. If Qwen fails later, AgentForge repeats that same Tester request once on
+DeepSeek and stops trying Qwen for the rest of the case. Authentication, malformed
+answers, local budget exhaustion, and reasoning mistakes do not trigger fallback;
+those remain visible failures instead of being hidden by extra model spending.
+
+This route completed one real SWE-bench Verified case end to end. DeepSeek
+planned, explored, changed two files, and reviewed the result; Qwen selected and
+reported the test run. Sixteen visible tests passed, Reviewer found no issue, and
+a fresh E2B grader confirmed the hidden case as resolved. The run cost estimate
+was about 2.6 cents. One case proves the plumbing and this repair, not the system's
+success rate across the full benchmark.
+
+## 7.21 What happened in the larger budgeted test?
+
+We froze a list of 20 real issues before running the agents. The list contains
+two issues from each of ten projects and preserves the order of the earlier
+balanced selection. This matters because choosing only easy-looking issues after
+seeing their outcomes would make the result misleading.
+
+AgentForge solved 9 of the 20 issues according to the independent SWE-bench
+grader: a 45% resolution rate on this particular subset. Across those nine
+repairs, all 18 tests aimed at the reported bugs and all 508 checks for existing
+behavior passed. The run used about $0.89 of its $2.50 inference allowance. It
+ran no more than five repair sandboxes at once, and every sandbox was gone after
+the benchmark finished.
+
+There are two important cautions. First, this is a custom 20-case subset, not an
+official leaderboard submission. Second, AgentForge's own Reviewer accepted
+only one patch even though the independent grader accepted nine. In everyday
+terms, the repair team was better at fixing code than its final inspector was at
+recognizing a correct fix. That is safer than exporting bad code, but improving
+the inspector is now an obvious next step.
+
+Seven difficult cases reached their private 500,000-token ceiling and stopped.
+That local limit is why one unusually long investigation could not consume the
+whole shared budget. The exact case list and machine-readable artifacts remain
+available so the same experiment can be repeated rather than remembered only as
+a resume number.
+
+Two of those seven cases had actually produced patches that passed canonical
+grading before the workflow's later budget stop. We therefore retried only the
+five that were still unresolved, one at a time. The token ceiling was raised high
+enough not to control the run, but each case still had a $0.32 limit and all five
+shared a $1.60 limit. This kept “try harder” from meaning “spend without a bound.”
+
+One retry, an Xarray issue, became a new canonical success. It passed its bug test
+and 653 regression tests. Keeping the better prediction for each issue raises the
+result from 9/20 to 10/20, or 50%. That number must be described as retry-assisted:
+the first-pass rate is still 45%. Both passes together used about $1.44 of the
+$2.50 inference allowance, and no cloud sandbox remained active afterward.
+
 ## 8. How the pieces fit together
+
+The cloud-billing challenge now has a verified successful live run: AgentForge
+repaired six seeded defects across three modules, taking the same 13 tests from
+nine failures to zero. The exported tests also passed independently on the host.
+The successful workflow took about 67 seconds; earlier failed runs are included
+in the history, not counted as successes. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md)
+for measured results and resume wording.
 
 ```text
 User task

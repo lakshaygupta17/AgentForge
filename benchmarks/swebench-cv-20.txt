@@ -1,0 +1,23 @@
+# AgentForge CV-20 benchmark, frozen 2026-09-14.
+# Selection rule: first two earlier HTTP-402-only cases from each of ten
+# repositories, preserving the original balanced 100-case ordering.
+sphinx-doc__sphinx-10435
+sympy__sympy-12096
+astropy__astropy-13236
+matplotlib__matplotlib-20488
+pydata__xarray-3151
+pylint-dev__pylint-4661
+pytest-dev__pytest-10356
+scikit-learn__scikit-learn-10908
+sphinx-doc__sphinx-10449
+sympy__sympy-12419
+astropy__astropy-13398
+django__django-10914
+matplotlib__matplotlib-20676
+psf__requests-1921
+pydata__xarray-3305
+pylint-dev__pylint-4970
+pytest-dev__pytest-5262
+scikit-learn__scikit-learn-11310
+django__django-10973
+psf__requests-2317

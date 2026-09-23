@@ -83,9 +83,7 @@ DEVELOPER_TOOLS = (
     APPLY_UNIFIED_PATCH_TOOL,
     FINISH_DEVELOPMENT_TOOL,
 )
-EDIT_TOOL_NAMES = frozenset(
-    {APPLY_PATCH_TOOL.name, APPLY_UNIFIED_PATCH_TOOL.name}
-)
+EDIT_TOOL_NAMES = frozenset({APPLY_PATCH_TOOL.name, APPLY_UNIFIED_PATCH_TOOL.name})
 
 
 class DeveloperAgent:
@@ -97,18 +95,22 @@ class DeveloperAgent:
         editor: RepositoryEditor,
         *,
         recorder: TrajectoryRecorder | None = None,
-        maximum_iterations: int = 8,
+        maximum_iterations: int = 20,
         maximum_context_characters: int = 6_000,
+        maximum_successful_edit_calls: int = 3,
     ) -> None:
         if maximum_iterations <= 0:
             raise ValueError("Maximum developer iterations must be greater than zero")
         if maximum_context_characters <= 0:
             raise ValueError("Developer context budget must be greater than zero")
+        if maximum_successful_edit_calls <= 0:
+            raise ValueError("Maximum successful edit calls must be greater than zero")
         self._provider = provider
         self._editor = editor
         self._recorder = recorder
         self._maximum_iterations = maximum_iterations
         self._maximum_context_characters = maximum_context_characters
+        self._maximum_successful_edit_calls = maximum_successful_edit_calls
 
     def run(self, state: WorkflowState) -> AgentResult:
         plan = state.artifacts.get(PLAN_ARTIFACT)
@@ -164,11 +166,11 @@ class DeveloperAgent:
         ]
 
         rejected_edit = False
+        successful_edit_calls = 0
+        finalization_requested = False
         attempt_changed_files: set[str] = set()
         for iteration in range(1, self._maximum_iterations + 1):
-            calls = self._request_tools(
-                state, iteration, messages, DEVELOPER_TOOLS
-            )
+            calls = self._request_tools(state, iteration, messages, DEVELOPER_TOOLS)
 
             finish_calls = [call for call in calls if call.name == FINISH_DEVELOPMENT_TOOL.name]
             if finish_calls:
@@ -184,11 +186,11 @@ class DeveloperAgent:
                 )
 
             for call in calls:
-                tool_message, succeeded, changed_files = self._execute_tool(
-                    state, iteration, call
-                )
+                tool_message, succeeded, changed_files = self._execute_tool(state, iteration, call)
                 messages.append(tool_message)
                 attempt_changed_files.update(changed_files)
+                if call.name in EDIT_TOOL_NAMES and succeeded:
+                    successful_edit_calls += 1
                 if call.name in EDIT_TOOL_NAMES and not succeeded:
                     rejected_edit = True
                     messages.append(
@@ -199,6 +201,14 @@ class DeveloperAgent:
                             "retry with apply_patch. Do not repeat a rejected patch.",
                         )
                     )
+                    if self._editor.patch_count > starting_patch_count:
+                        finalization_requested = True
+
+            if self._editor.patch_count > starting_patch_count and (
+                finalization_requested
+                or successful_edit_calls >= self._maximum_successful_edit_calls
+            ):
+                break
 
         next_iteration = self._maximum_iterations + 1
         if self._editor.patch_count == starting_patch_count and rejected_edit:
@@ -225,9 +235,7 @@ class DeveloperAgent:
                 (APPLY_PATCH_TOOL, APPLY_UNIFIED_PATCH_TOOL),
             )
             if len(calls) == 1 and calls[0].name in EDIT_TOOL_NAMES:
-                tool_message, _, changed_files = self._execute_tool(
-                    state, next_iteration, calls[0]
-                )
+                tool_message, _, changed_files = self._execute_tool(state, next_iteration, calls[0])
                 messages.append(tool_message)
                 attempt_changed_files.update(changed_files)
             else:
@@ -240,14 +248,23 @@ class DeveloperAgent:
             next_iteration += 1
 
         if self._editor.patch_count > starting_patch_count:
-            messages.append(
+            finalization_messages = [
                 ChatMessage(
                     "system",
                     "A validated patch has been applied. This is the report-only finalization "
                     "turn. Call finish_development exactly once with a concise summary. "
                     "AgentForge will attach the files confirmed by the patch tool.",
-                )
-            )
+                ),
+                ChatMessage(
+                    "user",
+                    json.dumps(
+                        {
+                            "confirmed_changed_files": sorted(attempt_changed_files),
+                            "confirmed_patch_calls": successful_edit_calls,
+                        }
+                    ),
+                ),
+            ]
             record_agent_event(
                 self._recorder,
                 state,
@@ -258,7 +275,7 @@ class DeveloperAgent:
             calls = self._request_tools(
                 state,
                 next_iteration,
-                messages,
+                finalization_messages,
                 (FINISH_DEVELOPMENT_TOOL,),
             )
             if len(calls) == 1 and calls[0].name == FINISH_DEVELOPMENT_TOOL.name:
@@ -391,9 +408,7 @@ class DeveloperAgent:
                 {"iteration": iteration, "tool": call.name, "reason": str(error)},
             )
         return (
-            ChatMessage(
-                "tool", json.dumps(payload, ensure_ascii=False), tool_call_id=call.id
-            ),
+            ChatMessage("tool", json.dumps(payload, ensure_ascii=False), tool_call_id=call.id),
             bool(payload["ok"]),
             confirmed_files,
         )
@@ -424,9 +439,7 @@ class DeveloperAgent:
             raise AgentProtocolError("Developer has no confirmed files for this attempt")
         if isinstance(raw_files, list):
             reported_files = {
-                path.strip()
-                for path in raw_files
-                if isinstance(path, str) and path.strip()
+                path.strip() for path in raw_files if isinstance(path, str) and path.strip()
             }
             if reported_files != attempt_changed_files:
                 record_agent_event(

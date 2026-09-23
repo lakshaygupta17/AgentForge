@@ -14,9 +14,7 @@ class BudgetedPayload:
     truncated: bool
 
 
-def budget_json_payload(
-    payload: dict[str, Any], maximum_characters: int
-) -> BudgetedPayload:
+def budget_json_payload(payload: dict[str, Any], maximum_characters: int) -> BudgetedPayload:
     """Serialize a tool payload without exceeding its model-context allowance."""
 
     if maximum_characters < 200:
@@ -25,9 +23,8 @@ def budget_json_payload(
     if len(original) <= maximum_characters:
         return BudgetedPayload(original, len(original), False)
 
-    preview = original
-    while True:
-        bounded = json.dumps(
+    def render(preview: str) -> str:
+        return json.dumps(
             {
                 "ok": payload.get("ok", True),
                 "truncated": True,
@@ -36,7 +33,16 @@ def budget_json_payload(
             },
             ensure_ascii=False,
         )
+
+    lower = 0
+    upper = len(original)
+    best = render("")
+    while lower <= upper:
+        midpoint = (lower + upper) // 2
+        bounded = render(original[:midpoint])
         if len(bounded) <= maximum_characters:
-            return BudgetedPayload(bounded, len(original), True)
-        excess = len(bounded) - maximum_characters
-        preview = preview[: max(0, len(preview) - excess - 1)]
+            best = bounded
+            lower = midpoint + 1
+        else:
+            upper = midpoint - 1
+    return BudgetedPayload(best, len(original), True)

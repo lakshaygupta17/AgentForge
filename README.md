@@ -1,5 +1,8 @@
 # AgentForge
 
+Measured live repair results and qualified resume wording are recorded in
+[BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md).
+
 AgentForge is a security-focused, multi-agent software engineering runtime. Its eventual job is to accept a repository and a task, let specialist AI agents inspect and change the code, run the result in an isolated sandbox, and return a tested patch with a complete audit trail.
 
 This is intentionally an individual learning and development project, not a deployment product or hosted service. Its E2B integration targets the free Hobby plan only; the architecture does not assume a future paid E2B tier.
@@ -413,12 +416,105 @@ agentforge live-repair `
   --allow-sandbox-execution
 ```
 
+`examples\fulfillment_repair_fixture` is the strict stress fixture. It contains
+23 tests across interacting promotion, FEFO inventory, shipping, tax, credit,
+and settlement rules. The seeded baseline passes 5 tests and fails 18; a checked
+reference passes all 23. The recorded five-attempt live run reached 20/23 and
+then failed closed, so AgentForge did not export an incomplete repair. See
+[BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for the measured trajectory and the
+separate successful cloud-billing result.
+
+```powershell
+agentforge live-repair `
+  --sandbox-backend e2b `
+  --workspace .\examples\fulfillment_repair_fixture `
+  --output .\artifacts\fulfillment-hard-repaired `
+  --max-attempts 5 `
+  --task "Read TASK.md and repair the multi-warehouse fulfillment implementation without modifying test_fulfillment.py" `
+  --allow-code-transmission `
+  --allow-sandbox-execution
+```
+
 To repeat only that minimal provider test deliberately:
 
 ```powershell
 $env:AGENTFORGE_RUN_HF_TESTS = "1"
 python -m pytest tests\integration\test_huggingface_live.py -q
 ```
+
+## 100-case SWE-bench run
+
+AgentForge can now generate patches for a balanced 100-case slice of the
+official SWE-bench Verified test split. This is a real repository benchmark,
+not another synthetic fixture. The run uses five ordered waves of 20: wave two
+cannot create a repair microVM until every case in wave one has finished. Each
+case has its own E2B `/testbed`, trajectory, prediction file, and append-only
+ledger record, so an interruption can resume without discarding finished work.
+
+Start or resume generation with:
+
+```powershell
+.\.venv\Scripts\agentforge.exe swebench-run `
+  --limit 100 `
+  --batch-size 20 `
+  --output .\artifacts\swebench-agentforge-100 `
+  --allow-code-transmission `
+  --allow-sandbox-execution
+```
+
+The generation command now defaults to a resilient budgeted hybrid. DeepSeek
+V4.1 Flash handles Planner, Repository Explorer, Developer, Debugger, and
+Reviewer. Qwen3.6 is the preferred Tester model; a bounded connection or
+rate-limit failure transparently retries the identical Tester request through
+DeepSeek and opens a circuit so later calls do not keep waiting on Qwen. One
+preflight checks both routes before creating an E2B microVM. One shared meter defaults
+to 80 requests, 1.5 million tokens, $0.30 estimated inference, and 4,096 output
+tokens per response. These are local fail-closed limits, not billing guarantees;
+provider prices must be kept current. Override them explicitly for a smaller
+smoke test, for example:
+
+```powershell
+.\.venv\Scripts\agentforge.exe swebench-run `
+  --subset .\artifacts\swebench-agentforge-100\selected-cases.jsonl `
+  --instance-id pytest-dev__pytest-10051 `
+  --limit 1 --batch-size 1 --max-attempts 1 `
+  --max-model-requests 30 --max-model-tokens 400000 `
+  --max-model-cost 0.06 `
+  --output .\artifacts\swebench-hybrid-smoke `
+  --allow-code-transmission --allow-sandbox-execution
+```
+
+`resolved_cases` in the generation ledger means the internal AgentForge
+workflow obtained passing visible tests and Reviewer acceptance. It is not the
+official benchmark score. Grade the resulting patches against the held-out
+tests in fresh microVMs before quoting a resume metric:
+
+```powershell
+.\.venv\Scripts\agentforge.exe swebench-grade `
+  --run .\artifacts\swebench-agentforge-100 `
+  --batch-size 20 `
+  --allow-code-transmission `
+  --allow-sandbox-execution
+```
+
+The grading command also runs sequential waves of at most 20. Gold patches are
+never saved in AgentForge's selected-case file or supplied to an agent. Both
+commands use the project `.venv`; the benchmark dependencies are installed with
+`.\.venv\Scripts\python.exe -m pip install -e ".[swebench]"`.
+
+The resilient hybrid was evaluated on the frozen manifest
+`benchmarks/swebench-cv-20.txt`: 9/20 SWE-bench Verified cases resolved (45%)
+with zero canonical grader errors. The resolved cases passed all 18 target tests
+and all 508 regression tests. Generation used 323 provider requests, 4,351,430
+provider-reported tokens, and $0.89365 estimated inference under a hard $2.50
+cap. Cases ran in four sequential waves of at most five, and seven expensive
+cases stopped at their own 500,000-token ceiling. This is a custom frozen subset,
+not an official leaderboard submission. Five still-unresolved capped cases were
+then retried sequentially with a non-binding token ceiling but retained dollar
+guards. One additional Xarray case resolved, producing a retry-assisted best-of
+10/20 (50%); cumulative inference was $1.43672. The honest first-pass score
+remains 9/20 (45%). Full selection rules, limitations, and measurements are in
+[BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md).
 
 ## Core design rules
 

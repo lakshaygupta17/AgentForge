@@ -48,6 +48,7 @@ class OpenAICompatibleProvider:
         api_key: str,
         model: str,
         timeout_seconds: float = 60.0,
+        maximum_output_tokens: int | None = None,
         retry_policy: RetryPolicy | None = None,
         transport: HttpTransport | None = None,
         sleeper: Callable[[float], None] = time.sleep,
@@ -60,10 +61,13 @@ class OpenAICompatibleProvider:
             raise ValueError("Model name cannot be empty")
         if timeout_seconds <= 0:
             raise ValueError("Provider timeout must be greater than zero")
+        if maximum_output_tokens is not None and maximum_output_tokens <= 0:
+            raise ValueError("Maximum output tokens must be greater than zero")
 
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.maximum_output_tokens = maximum_output_tokens
         self.retry_policy = retry_policy or RetryPolicy()
         self._api_key = api_key
         self._transport = transport or UrllibHttpTransport()
@@ -86,13 +90,22 @@ class OpenAICompatibleProvider:
             "messages": [self._message_payload(message) for message in messages],
             "stream": False,
         }
+        if self.maximum_output_tokens is not None:
+            payload["max_tokens"] = self.maximum_output_tokens
         if tools:
             payload["tools"] = [self._tool_payload(tool) for tool in tools]
             payload["tool_choice"] = tool_choice
 
         encoded_payload = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        response = self._post_with_retries(encoded_payload)
-        return self._parse_response(response)
+        for response_attempt in range(2):
+            response = self._post_with_retries(encoded_payload)
+            try:
+                return self._parse_response(response)
+            except ProviderResponseError:
+                if response_attempt == 1:
+                    raise
+                self._sleep(self.retry_policy.initial_delay_seconds)
+        raise AssertionError("response retry loop ended unexpectedly")
 
     def _post_with_retries(self, body: bytes) -> HttpResponse:
         delay = self.retry_policy.initial_delay_seconds
@@ -137,9 +150,7 @@ class OpenAICompatibleProvider:
             return response
 
         raise ProviderConnectionError(
-            redact_sensitive_text(
-                f"Model provider could not be reached: {last_connection_error}"
-            )
+            redact_sensitive_text(f"Model provider could not be reached: {last_connection_error}")
         ) from last_connection_error
 
     def _parse_response(self, response: HttpResponse) -> ChatResponse:
@@ -155,9 +166,7 @@ class OpenAICompatibleProvider:
             for raw_call in raw_message.get("tool_calls") or []:
                 raw_arguments = raw_call["function"]["arguments"]
                 arguments = (
-                    json.loads(raw_arguments)
-                    if isinstance(raw_arguments, str)
-                    else raw_arguments
+                    json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
                 )
                 if not isinstance(arguments, dict):
                     raise TypeError("Tool arguments must be an object")

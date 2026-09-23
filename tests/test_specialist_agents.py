@@ -122,9 +122,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             (root / "service.py").write_text(
-                "class CheckoutService:\n"
-                "    def checkout(self, cart):\n"
-                "        return cart[0]\n",
+                "class CheckoutService:\n    def checkout(self, cart):\n        return cart[0]\n",
                 encoding="utf-8",
             )
             provider = MockLLMProvider(
@@ -191,9 +189,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             orchestrator = MultiAgentOrchestrator(
                 [
                     PlannerAgent(provider, recorder=recorder),
-                    RepositoryExplorerAgent(
-                        provider, RepositoryInspector(root), recorder=recorder
-                    ),
+                    RepositoryExplorerAgent(provider, RepositoryInspector(root), recorder=recorder),
                 ],
                 recorder,
             )
@@ -203,9 +199,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
         self.assertFalse(state.failed)
         recovery_request = provider.requests[-1]
         self.assertIn("escapes", recovery_request.messages[-1].content or "")
-        self.assertIn(
-            "tool_rejected", [event.event_type for event in recorder.events]
-        )
+        self.assertIn("tool_rejected", [event.event_type for event in recorder.events])
 
     def test_final_explorer_turn_offers_only_the_required_report_tool(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -227,9 +221,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             )
             state = WorkflowState(
                 task=Task("Inspect app"),
-                artifacts={
-                    PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")
-                },
+                artifacts={PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")},
             )
             recorder = InMemoryTrajectoryRecorder()
 
@@ -250,6 +242,8 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             ("finish_exploration",),
         )
         self.assertEqual(provider.requests[-1].messages[-1].role, "system")
+        self.assertIn("app.py", provider.requests[-1].messages[-2].content or "")
+        self.assertFalse(any(message.tool_calls for message in provider.requests[-1].messages))
         self.assertIn(
             "exploration_finalization_required",
             [event.event_type for event in recorder.events],
@@ -275,9 +269,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             )
             state = WorkflowState(
                 task=Task("Inspect app"),
-                artifacts={
-                    PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")
-                },
+                artifacts={PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")},
             )
             recorder = InMemoryTrajectoryRecorder()
 
@@ -298,6 +290,56 @@ class PlannerAndExplorerWorkflowTests(TestCase):
         self.assertIn("exploration_finalization_retry", event_types)
         self.assertIn("tool_rejected", event_types)
 
+    def test_explorer_corrects_a_report_with_an_unverified_file(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            provider = MockLLMProvider(
+                [
+                    tool_response(
+                        "invalid",
+                        "finish_exploration",
+                        {
+                            "summary": "Inspected files",
+                            "relevant_files": ["app.py", "missing.py"],
+                            "findings": ["The issue mentions missing.py"],
+                        },
+                    ),
+                    tool_response(
+                        "corrected",
+                        "finish_exploration",
+                        {
+                            "summary": "Inspected app.py",
+                            "relevant_files": ["app.py"],
+                            "findings": ["app.py contains the implementation"],
+                        },
+                    ),
+                ]
+            )
+            state = WorkflowState(
+                task=Task("Inspect app"),
+                artifacts={PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")},
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = RepositoryExplorerAgent(
+                provider,
+                RepositoryInspector(root),
+                recorder=recorder,
+                maximum_iterations=1,
+            ).run(state)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.requests), 2)
+        correction_evidence = provider.requests[-1].messages[-2].content or ""
+        self.assertIn('"forbidden_nonexistent_files": ["missing.py"]', correction_evidence)
+        self.assertIn('"allowed_relevant_files": ["app.py"]', correction_evidence)
+        self.assertNotIn('"task":', correction_evidence)
+        self.assertIn(
+            "exploration_finalization_retry",
+            [event.event_type for event in recorder.events],
+        )
+
     def test_explorer_fails_closed_when_correction_retry_calls_wrong_tool(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -310,9 +352,7 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             )
             state = WorkflowState(
                 task=Task("Inspect app"),
-                artifacts={
-                    PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")
-                },
+                artifacts={PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")},
             )
             recorder = InMemoryTrajectoryRecorder()
 
@@ -376,11 +416,47 @@ class PlannerAndExplorerWorkflowTests(TestCase):
             [event.event_type for event in recorder.events],
         )
         self.assertTrue(
-            any(
-                entry.category == "repository_observation"
-                for entry in state.memory.entries
-            )
+            any(entry.category == "repository_observation" for entry in state.memory.entries)
         )
+
+    def test_explorer_forces_early_finalization_after_duplicate_reads(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            provider = MockLLMProvider(
+                [
+                    tool_response("read-1", "read_file", {"path": "app.py"}),
+                    tool_response("read-2", "read_file", {"path": "app.py"}),
+                    tool_response("read-3", "read_file", {"path": "app.py"}),
+                    tool_response(
+                        "finish",
+                        "finish_exploration",
+                        {
+                            "summary": "Inspected app.py",
+                            "relevant_files": ["app.py"],
+                            "findings": ["app.py contains the implementation"],
+                        },
+                    ),
+                ]
+            )
+            state = WorkflowState(
+                task=Task("Inspect app"),
+                artifacts={PLAN_ARTIFACT: Plan(("Inspect app.py",), "Find the implementation")},
+            )
+            recorder = InMemoryTrajectoryRecorder()
+
+            result = RepositoryExplorerAgent(
+                provider,
+                RepositoryInspector(root),
+                recorder=recorder,
+                maximum_iterations=8,
+            ).run(state)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.requests), 4)
+        event_types = [event.event_type for event in recorder.events]
+        self.assertEqual(event_types.count("tool_rejected"), 2)
+        self.assertIn("exploration_finalization_required", event_types)
 
 
 class RepositoryInspectorTests(TestCase):

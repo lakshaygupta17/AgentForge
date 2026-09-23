@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from agentforge.agents.base import AgentResult
 from agentforge.agents.developer import DEVELOPMENT_ARTIFACT
 from agentforge.agents.errors import AgentProtocolError
@@ -11,7 +13,7 @@ from agentforge.agents.tester import TEST_ARTIFACT
 from agentforge.context.budget import budget_json_payload
 from agentforge.core.models import WorkflowState
 from agentforge.llm.base import LLMProvider
-from agentforge.llm.models import ChatMessage, ToolDefinition
+from agentforge.llm.models import ChatMessage, ChatResponse, ToolDefinition
 from agentforge.telemetry.trajectory import TrajectoryRecorder
 from agentforge.tools.editor import RepositoryEditor
 
@@ -126,6 +128,46 @@ class ReviewerAgent:
                 "total_tokens": response.usage.total_tokens,
             },
         )
+        try:
+            report = self._parse_report(response, diff)
+        except AgentProtocolError as error:
+            correction_messages = list(messages) + [response.message]
+            for call in response.message.tool_calls:
+                correction_messages.append(ChatMessage(
+                    "tool", json.dumps({"ok": False, "error": str(error)}),
+                    tool_call_id=call.id,
+                ))
+            correction_messages.append(ChatMessage(
+                "system",
+                "Correct the report format in this single retry using the same evidence. "
+                "Call submit_review once with accepted as a boolean, a non-empty summary, "
+                "and issues as a list of non-empty strings. Use [] if there are no issues. "
+                "A rejection must include at least one concrete issue.",
+            ))
+            record_agent_event(self._recorder, state, self.name,
+                               "review_report_retry", {"reason": str(error)})
+            record_agent_event(self._recorder, state, self.name, "llm_requested",
+                               {"message_count": len(correction_messages)})
+            response = self._provider.chat(
+                correction_messages, tools=(SUBMIT_REVIEW_TOOL,), tool_choice="required"
+            )
+            record_agent_event(self._recorder, state, self.name, "llm_responded", {
+                "model": response.model,
+                "tool_call_count": len(response.message.tool_calls),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens,
+            })
+            report = self._parse_report(response, diff)
+        record_agent_event(
+            self._recorder, state, self.name, "review_completed",
+            {"accepted": report.accepted, "issue_count": len(report.issues),
+             "summary": report.summary, "issues": list(report.issues)},
+        )
+        return AgentResult(report.accepted, report.summary, {REVIEW_ARTIFACT: report})
+
+    @staticmethod
+    def _parse_report(response: ChatResponse, diff: str) -> ReviewReport:
         if len(response.message.tool_calls) != 1:
             raise AgentProtocolError("Reviewer must submit exactly one verdict")
         call = response.message.tool_calls[0]
@@ -146,26 +188,9 @@ class ReviewerAgent:
         if not accepted and not issues:
             raise AgentProtocolError("A rejected review must explain at least one issue")
 
-        report = ReviewReport(
+        return ReviewReport(
             accepted,
             summary.strip(),
             tuple(issue.strip() for issue in issues),
             diff,
-        )
-        record_agent_event(
-            self._recorder,
-            state,
-            self.name,
-            "review_completed",
-            {
-                "accepted": accepted,
-                "issue_count": len(report.issues),
-                "summary": report.summary,
-                "issues": list(report.issues),
-            },
-        )
-        return AgentResult(
-            accepted,
-            report.summary,
-            {REVIEW_ARTIFACT: report},
         )

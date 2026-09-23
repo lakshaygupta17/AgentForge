@@ -1,5 +1,34 @@
 # AgentForge Development Tracker
 
+### 2026-09-13 — Fulfillment stress benchmark and live protocol hardening
+
+- Added an eight-file multi-warehouse fulfillment fixture covering promotions,
+  atomic FEFO inventory, dimensional shipping, tax, credits, and orchestration.
+- Verified the defective baseline at 5/23 tests and an integer-only reference at 23/23.
+- A preliminary 22/22 result was rejected after independent checking found floating-point
+  shipping math; a large-integer precision test now prevents that false success.
+- The strict live run repaired 15 of 18 initially failing checks and finished at 20/23
+  after five attempts, 11 patches, 73 model requests, and 260.88 workflow seconds.
+- The failed run exported no result. Its trajectory remains available for diagnosis.
+- Increased bounded Explorer and Developer capacity for multi-file repositories,
+  isolated Explorer finalization from tool-loop inertia, and added one retry for
+  malformed provider responses. Repeated malformed responses still fail closed.
+- Verification: 210 tests pass, 3 skip, and 20 subtests pass; Ruff and strict MyPy pass.
+
+
+### 2026-09-13 — Verified cloud-billing repair and Reviewer recovery
+
+- Added one bounded report-format correction for Reviewer using identical diff
+  and test evidence. Repeated malformed verdicts still fail; valid rejection remains rejection.
+- Regression coverage checks recovery, repeated-invalid reports, and rejection.
+- A provider-timeout run and a malformed-review run were retained as failures.
+- The final hosted run completed in 66.98 workflow seconds, with 19 model requests,
+  51,012 reported tokens, three accepted patches and one repair attempt.
+- All six seeded defects across three modules were repaired; all 13 acceptance
+  tests passed in E2B and independently on exported output. Test-file hashes match.
+- Added BENCHMARK_RESULTS.md with evidence, limits, and qualified resume wording.
+- Verification: 209 tests pass, 3 skip, 20 subtests pass; Ruff and strict MyPy pass.
+
 This file is the living, section-by-section record of what is planned, what is being built, and what is verified. Update it whenever behavior changes—not only when a whole milestone finishes.
 
 Status legend: `[x]` complete, `[~]` externally blocked, `[—]` intentionally outside the agreed scope, `[ ]` not started.
@@ -749,3 +778,86 @@ The local workspace and private GitHub repository are now connected. Normal deve
 - Added exactly one correction-only Tester report turn, mirroring the bounded Explorer finalization recovery. It reuses the completed execution evidence and never exposes a command tool.
 - Added tests proving an invented narrower command cannot execute, a corrected report remains tied to the original failure, and a second invalid report stops closed.
 - Final offline verification: 208 tests pass, three external integrations skip by default, 17 subtests pass, Ruff passes, and strict MyPy passes across 69 source files. The failed authorized run is preserved at `trajectories/live-repair-20260913T125416Z.jsonl`; no repeat hosted run has been made.
+
+### 2026-09-13 — SWE-bench Verified 100-case pipeline
+
+- Pinned the official E2B SWE-bench harness at commit `625d0421c96eaae0290bba57420a41ff6c84fc31` as an optional `.venv` dependency.
+- Added balanced Verified-case selection that stores issue metadata without the reference patch.
+- Added an E2B `/testbed` adapter so the actual six AgentForge specialists inspect, edit, test, debug, and review the prepared real repository rather than using a separate benchmark-only agent.
+- Added official image/template naming, remote path validation, sensitive-file filtering, policy-controlled commands, per-case trajectories, and Git patch capture.
+- Added a resumable batch controller with an enforced maximum of 20 concurrent cases, a wave barrier, and immediate per-case ledger writes. A 100-case run is exactly five ordered waves of 20.
+- Added prediction aggregation and a separate canonical grader that evaluates patches in fresh E2B microVMs, also in waves of at most 20.
+- Added a narrow Windows compatibility shim for SWE-bench's unused Unix `resource` import; grading itself remains inside Linux microVMs.
+- Final offline verification: 221 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 72 source files.
+- The first external smoke attempt was blocked before creating a microVM because destination-specific approval must explicitly cover sending public SWE-bench source excerpts to Hugging Face and consuming E2B credits. No benchmark score has been claimed.
+- After explicit approval, the Astropy smoke generated and exported a patch, then completed canonical grading at 0/1 without an infrastructure error.
+- Started the balanced 100-case run. Only the first 20-template/20-sandbox wave started; wave two never started.
+- Stopped the run when nine cases recorded Hugging Face HTTP 402 and several client-side searches stalled on large repositories. Terminated the exact four remaining wave-one sandboxes and verified the E2B active count returned to zero.
+- Recovered 16 terminal trajectories and prediction parts into the resume ledger: one locally accepted and 15 locally unresolved. These are generation statuses, not canonical scores.
+- Replaced per-file remote search round trips with a bounded literal `grep` inside `/testbed`, and changed the scheduler to checkpoint each case immediately rather than waiting for its wave.
+- Raised only the remote SWE-bench text-file ceiling from 100 KB to 1 MB after two valid Matplotlib implementation files exceeded the synthetic-fixture limit; local repository defaults remain unchanged.
+- Current verification: 223 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 72 source files.
+
+### 2026-09-14 — Budgeted Qwen/DeepSeek hybrid experiment
+
+- Split SWE-bench inference by role: Qwen3.6 serves Planner, Repository Explorer, and Tester; DeepSeek V4.1 Flash serves Developer, Debugger, and Reviewer.
+- Added one thread-safe run budget shared by both routes, with conservative pre-request reservations and limits for request count, provider-reported tokens, estimated dollars, and output tokens.
+- Added a stop hook so an exhausted budget prevents later E2B waves from being prepared or started; partial summaries no longer assume every selected case completed.
+- Added `--instance-id` for controlled single-case comparisons and exposed both model routes, prices, and budget limits through `swebench-run`.
+- Added a bounded Tester correction when a model-supplied pass/fail value contradicts the actual command exit status.
+- Replaced lossy evidence truncation with a binary-search boundary that preserves almost the entire permitted context window.
+- Reject duplicate Explorer tool requests and force early report finalization after two repetitions.
+- Ran four capped attempts on `pytest-dev__pytest-10051`. The first reached both providers: DeepSeek produced a patch and the visible test command exited successfully, but Qwen contradicted that result in its report. Later attempts exposed Qwen file-grounding failures before the DeepSeek handoff, so no hybrid success is claimed.
+- The duplicate/evidence fix reduced a comparable Qwen exploration from 264,330 tokens and $0.0309 estimated cost to 47,319 tokens and $0.00795, an 82.1% token reduction and 74.3% estimated-cost reduction.
+- The four experiments used 672,248 provider-reported tokens and $0.0879 estimated inference in total. All runs stayed within their individual caps and used one E2B sandbox at a time.
+- Current offline verification: 229 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 73 source files.
+
+### 2026-09-14 — DeepSeek Explorer comparison
+
+- Moved Repository Explorer from the economy Qwen route to the stronger DeepSeek route after controlled runs showed repeated nonexistent-file reports from Qwen.
+- Kept Qwen3.6 for Planner and Tester; DeepSeek V4.1 Flash now handles Explorer, Developer, Debugger, and Reviewer.
+- Retained the shared request, token, estimated-cost, and output-token limits so the new run is directly comparable and remains fail-closed.
+- Made two controlled attempts on `pytest-dev__pytest-10051`. Both Qwen Planner requests timed out before Explorer started, each recording one request, zero provider-reported tokens, and $0 estimated usage. No DeepSeek quality result or repair success is claimed.
+- Verified that both attempts cleaned up their single E2B microVM; the final active-sandbox count was zero.
+- Ran DeepSeek Explorer directly on the six-file checkout fixture so Qwen availability could not mask the role under test. It succeeded in four requests using 9,969 provider-reported tokens and $0.00237 estimated inference.
+- The Explorer returned all six verified paths and correctly identified the discount-rounding, tax-exemption, and discounted-subtotal free-shipping defects; the findings were independently checked against the fixture source and tests.
+- Current offline verification: 231 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 73 source files.
+
+### 2026-09-14 — Resilient hybrid routing
+
+- Moved Planner to DeepSeek so an unavailable Qwen route can no longer block the workflow before repository inspection.
+- Kept Qwen as Tester's preferred economy route and added transparent DeepSeek fallback only for bounded connection and rate-limit failures.
+- Added a per-case circuit breaker: after one transient Qwen failure, later Tester calls go directly to DeepSeek rather than repeating the delay.
+- Added a pre-E2B readiness probe. DeepSeek failure stops before sandbox creation; transient Qwen failure records degraded mode and starts with the Tester circuit open.
+- Reduced the Qwen route to two 30-second transport attempts and gave the slower DeepSeek route one 180-second attempt.
+- Both primary and fallback calls use the same request, token, and estimated-cost budget.
+- Added an explicit Explorer correction allowlist and nonexistent-path denylist, removing issue text from the retry after a grounded-path rejection.
+- Added bounded Developer finalization after a rejected follow-up to a valid patch or three successful edit calls; its report-only request now uses compact confirmed-patch evidence.
+- Fixed Windows canonical grading by writing the third-party harness's temporary test log in the encoding used by its locale-based reader and retrying errored verdicts rather than treating them as completed.
+- Completed `pytest-dev__pytest-10051`: DeepSeek handled Planner, Explorer, Developer, and Reviewer; Qwen handled Tester; 16 visible tests passed and Reviewer accepted with zero issues.
+- Fresh canonical grading resolved the hidden case at 1/1: one FAIL_TO_PASS and 15 PASS_TO_PASS tests succeeded, with no collection or warning error.
+- The successful generation used 19 requests, 125,593 provider-reported tokens, $0.02625 estimated inference, 192.08 workflow seconds, and one sandbox at a time. Final active E2B sandboxes: zero.
+- Current offline verification: 235 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 74 source files.
+
+### 2026-09-14 — Budgeted 20-case canonical benchmark
+
+- Froze `benchmarks/swebench-cv-20.txt` before execution: two cases from each of ten repositories, preserving their order in the earlier balanced 100-case selection rather than choosing cases by outcome.
+- Added per-case request, token, and estimated-cost limits nested under the shared global inference budget, plus an instance-ID manifest option for exact reproduction.
+- Ran all 20 cases in four sequential waves of five E2B Hobby microVMs with a hard $2.50 global inference cap and $0.125 / 500,000-token per-case caps.
+- Generation made 323 provider requests and used 4,351,430 provider-reported tokens for $0.8936502 estimated inference; seven outliers stopped at the per-case token boundary and the global budget remained unexhausted.
+- Canonical SWE-bench grading resolved 9/20 cases (45.0%) across six repositories with zero grader errors. Resolved cases passed all 18 FAIL_TO_PASS and all 508 PASS_TO_PASS tests.
+- Generated 14 non-empty predictions; 9/14 (64.3%) resolved canonically. Internal review accepted only one, exposing conservative acceptance calibration rather than inflating the score.
+- Reproduced and fixed a Windows locale decoding failure in the third-party grading path, reran only the errored Sphinx verdict, and converted it into a valid canonical unresolved result.
+- Verified cleanup through the E2B API: zero active sandboxes after generation and grading.
+- Added a regression test that passes Unicode output through the Windows locale-based grader reader.
+- Final offline verification: 237 tests pass, three external integration tests skip by default, 20 subtests pass, Ruff passes, and strict MyPy passes across 74 source files.
+
+### 2026-09-14 — Sequential retries for five capped benchmark cases
+
+- Excluded `django__django-10914` and `pytest-dev__pytest-5262` from retry because their original predictions already resolved canonically despite later workflow budget stops.
+- Froze the five still-unresolved cases in `benchmarks/swebench-cv-expensive-5.txt` and ran them sequentially with `batch-size 1`.
+- Raised the case token ceiling to a non-binding 10 million while retaining 60-request, 4,096-output-token, $0.32 per-case, and $1.60 shared cost guards.
+- The retry generation used 97 provider requests, 2,681,126 provider-reported tokens, and $0.5430703 estimated inference. Its longest completed case used 905,102 tokens.
+- Canonical grading resolved `pydata__xarray-3305`; its one FAIL_TO_PASS and 653 PASS_TO_PASS tests all passed. The other four retry predictions remained unresolved, with zero grader errors.
+- Best-of-first-pass-and-retry performance is 10/20 (50.0%), while the independently reported first-pass score remains 9/20 (45.0%). Combined resolved cases pass 19 target and 1,161 regression tests.
+- Cumulative estimated inference is $1.4367205 of the authorized $2.50 ceiling. Verified zero active E2B sandboxes after grading.

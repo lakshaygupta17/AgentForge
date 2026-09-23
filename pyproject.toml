@@ -23,6 +23,9 @@ service = [
   "fastapi>=0.115,<1",
   "uvicorn>=0.30,<1",
 ]
+swebench = [
+  "e2b-swebench @ git+https://github.com/e2b-dev/swe-bench.git@625d0421c96eaae0290bba57420a41ff6c84fc31",
+]
 dev = [
   "httpx>=0.27,<1",
   "mypy>=1.11",
